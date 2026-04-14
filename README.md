@@ -1,10 +1,8 @@
 # lcdata
 
-**Lieutenant Commander Data** — A declarative agentic LLM execution engine.
+A declarative agentic LLM execution engine. Drop a folder into `nodes/`, write a JSON config, and the engine exposes it as a REST + WebSocket API endpoint. No code changes. No recompile. Nodes compose into pipelines with conditional branching, parallel execution, loops, and fan-out — all in JSON.
 
-Drop a folder into `nodes/`, write a JSON config, and the engine exposes it as a REST + WebSocket API endpoint. No code changes. No recompile. Nodes compose into pipelines with conditional branching, parallel execution, loops, and fan-out — all in JSON.
-
-Same spirit as the rest of the stack: single Go binary, JSON config files, Chi router, JWT auth, Cobra CLI.
+Built as a single Go binary with a file-first design: the binary is the engine, `nodes/` is the content.
 
 ---
 
