@@ -55,9 +55,9 @@ The `type` field determines how it runs. Nodes can be wired together into pipeli
 | `file` | File operations — read, write, append, exists, delete, list |
 | `command` | Shell command with streaming stdout |
 | `transform` | Template-based data reshaping, no external call |
-| `database` | SQL query — Postgres, MySQL, SQLite *(stubbed)* |
-| `stt` | Speech-to-text — Deepgram *(stubbed)* |
-| `tts` | Text-to-speech — ElevenLabs *(stubbed)* |
+| `database` | SQL query — Postgres or SQLite |
+| `stt` | Speech-to-text — Deepgram or OpenAI Whisper |
+| `tts` | Text-to-speech — ElevenLabs or OpenAI |
 | `pipeline` | Orchestrates other nodes — sequential, switch, parallel, loop, map |
 
 ---
@@ -77,6 +77,9 @@ The `type` field determines how it runs. Nodes can be wired together into pipeli
   "temperature": 0.7,
   "max_tokens": 4096,
   "stream": true,
+  "tools": ["web_search", "read_file"],
+  "retry_count": 2,
+  "retry_delay": "1s",
   "structured_output": {
     "intent": { "type": "string" },
     "confidence": { "type": "number" }
@@ -96,6 +99,8 @@ The `type` field determines how it runs. Nodes can be wired together into pipeli
 - **`stream: true`** emits `chunk` events over WebSocket/SSE as tokens arrive
 - **`structured_output`** — when set, the LLM response is parsed as JSON and each field is merged into the output map alongside `response`
 - **`history`** input — pass an array of `{role, content}` objects for multi-turn conversations
+- **`tools`** — list of node names the LLM can invoke as tools (Anthropic only). The engine runs an agentic loop (up to 10 turns) calling nodes and feeding results back until the model returns a final answer
+- **`retry_count` / `retry_delay`** — retry on API error with exponential backoff + jitter (e.g. `"retry_count": 3, "retry_delay": "1s"`)
 
 ### HTTP Node
 
@@ -207,6 +212,78 @@ The `type` field determines how it runs. Nodes can be wired together into pipeli
 }
 ```
 
+### Database Node
+
+```json
+{
+  "name": "query_users",
+  "type": "database",
+  "driver": "sqlite",
+  "connection": "./data.db",
+  "query": "SELECT * FROM users WHERE name = ?",
+  "params": ["{{.input.name}}"],
+  "input": {
+    "name": { "type": "string", "required": true }
+  },
+  "output": {
+    "rows":  { "type": "array" },
+    "count": { "type": "number" }
+  }
+}
+```
+
+- **drivers:** `sqlite`, `postgres`
+- `params` values are Go templates rendered against the run context
+- Rows stream as `chunk` events; final output is `{rows, count}`
+
+### STT Node
+
+```json
+{
+  "name": "transcribe",
+  "type": "stt",
+  "provider": "deepgram",
+  "model": "nova-2",
+  "language": "en",
+  "input": {
+    "url": { "type": "string", "required": true }
+  },
+  "output": {
+    "transcript": { "type": "string" },
+    "confidence": { "type": "number" },
+    "words":      { "type": "array" },
+    "duration":   { "type": "number" },
+    "language":   { "type": "string" }
+  }
+}
+```
+
+- **providers:** `deepgram` (pre-recorded REST API), `openai` / `whisper` (multipart upload)
+- Deepgram accepts an audio URL in `input.url`; OpenAI/Whisper accepts a URL that is fetched then uploaded
+
+### TTS Node
+
+```json
+{
+  "name": "speak",
+  "type": "tts",
+  "provider": "elevenlabs",
+  "model": "eleven_multilingual_v2",
+  "voice_id": "21m00Tcm4TlvDq8ikWAM",
+  "input": {
+    "text": { "type": "string", "required": true }
+  },
+  "output": {
+    "audio_base64": { "type": "string" },
+    "content_type":  { "type": "string" },
+    "size_bytes":    { "type": "number" }
+  }
+}
+```
+
+- **providers:** `elevenlabs`, `openai`
+- Returns audio as a base64-encoded string with MIME type `audio/mpeg`
+
 ---
 
 ## Pipelines
@@ -235,6 +312,19 @@ Pipelines wire nodes together. Each step's output is available to all subsequent
   "input": {
     "message": "{{.fetch.body}}"
   }
+}
+```
+
+### Error Handling
+
+Any step can specify `on_error` to run a fallback node instead of aborting the pipeline. The handler node receives `input.error` and `input.step_id`; its output replaces the failed step's output.
+
+```json
+{
+  "id": "fetch",
+  "node": "fetch_url",
+  "input": { "url": "{{.input.url}}" },
+  "on_error": "fallback_handler"
 }
 ```
 
@@ -469,7 +559,7 @@ All streaming connections (WebSocket and SSE) receive the same event stream:
 {"event":"run_completed",  "run_id":"abc", "output":{...}, "duration_ms":4380}
 ```
 
-**Event types:** `run_started`, `run_completed`, `run_failed`, `run_cancelled`, `step_started`, `step_completed`, `step_failed`, `chunk`, `loop_iteration`, `map_progress`
+**Event types:** `run_started`, `run_completed`, `run_failed`, `run_cancelled`, `step_started`, `step_completed`, `step_failed`, `chunk`, `loop_iteration`, `map_progress`, `retry`
 
 ---
 
@@ -489,9 +579,16 @@ Created automatically on first run.
   "log_level":           "info",
   "max_concurrent_runs": 10,
   "run_timeout":         "5m",
-  "run_history":         100
+  "run_history":         100,
+  "store_path":          "./lcdata.db",
+  "rate_limit_rps":      0,
+  "rate_limit_burst":    0
 }
 ```
+
+- **`store_path`** — SQLite file for run history persistence (created automatically)
+- **`rate_limit_rps`** — requests per second per JWT `sub` claim (0 = disabled); falls back to remote IP when no JWT is present
+- **`rate_limit_burst`** — bucket size for bursts (default: `rps * 2`)
 
 ### Credentials (`~/lcdataenv.json`)
 
@@ -539,14 +636,17 @@ Lookup order: `~/lcdataenv.json` → `./nodes/env.json`. All fields also fall ba
 ## CLI
 
 ```
-lcdata serve                                    start the HTTP + WebSocket server
-lcdata list                                     list all nodes
-lcdata show [name]                              show full node config
-lcdata run [name] --input key=val --env prod    run a node locally (no server)
-lcdata validate                                 validate all node configs
-lcdata graph [name]                             print execution tree with icons
-lcdata generate-jwt --client my-service         generate a signed JWT
-lcdata version                                  show version
+lcdata serve                                        start the HTTP + WebSocket server
+lcdata init [name] [type]                           scaffold a new node directory
+lcdata list                                         list all nodes
+lcdata show [name]                                  show full node config
+lcdata run [name] --input key=val --env prod        run a node locally (no server)
+lcdata run [name] --input message=-                 read one input value from stdin
+lcdata validate                                     validate all node configs
+lcdata graph [name]                                 print execution tree with icons
+lcdata generate-jwt --client my-service             generate a signed JWT
+lcdata generate-jwt --client svc --allow node1,node2  JWT scoped to specific nodes
+lcdata version                                      show version
 ```
 
 **Graph output example:**
@@ -587,6 +687,47 @@ Authorization: Bearer <token>
 
 ---
 
+## Operational Features
+
+### Hot Reload
+
+The server watches the `nodes/` directory with fsnotify. Adding, editing, or removing a node config takes effect within 200ms — no restart required. Discovery endpoints always reflect the current state.
+
+### Run Persistence
+
+Completed runs are persisted to SQLite (`store_path` in config). The `/api/runs` endpoint returns the most recent N runs (`run_history`), merging in-flight runs with persisted ones.
+
+### Cost Tracking
+
+LLM nodes report `input_tokens` and `output_tokens` in their output under a `usage` key. The runner aggregates token counts across all steps and exposes them on the run record:
+
+```json
+{
+  "run_id": "a3f9b2c1",
+  "input_tokens": 1240,
+  "output_tokens": 387,
+  "steps": [
+    { "id": "classify", "input_tokens": 320,  "output_tokens": 12  },
+    { "id": "answer",   "input_tokens": 920,  "output_tokens": 375 }
+  ]
+}
+```
+
+### Retry
+
+Nodes that fail due to transient errors (API timeouts, rate limits) retry automatically with exponential backoff and ±25% jitter. Configure per-node:
+
+```json
+{
+  "retry_count": 3,
+  "retry_delay": "1s"
+}
+```
+
+`retry` events are emitted on each attempt so streaming clients can observe them.
+
+---
+
 ## Project Structure
 
 ```
@@ -598,33 +739,37 @@ lcdata/
   DESIGN.md
   cmd/
     root.go           Cobra root + global flags
-    serve.go          HTTP server, WebSocket, SSE, JWT middleware
+    serve.go          HTTP server, WebSocket, SSE, JWT middleware, rate limiting
+    init.go           lcdata init (scaffold node directory)
     list.go           lcdata list
     show.go           lcdata show
-    run.go            lcdata run
+    run.go            lcdata run (stdin support via key=-)
     validate.go       lcdata validate
     graph.go          lcdata graph (ASCII tree)
-    jwt.go            lcdata generate-jwt
+    jwt.go            lcdata generate-jwt (with --allow node scoping)
     version.go        lcdata version
   internal/lcdata/
     config.go         Server config (lcdata.json)
     environment.go    Credentials config (lcdataenv.json)
-    node.go           Node struct, JSON loading, field schema
+    node.go           Node struct, JSON loading, field schema, input validation
     pipeline.go       Step, SwitchCase, LoopConfig, MapConfig types
-    runner.go         Run lifecycle, async execution, history
+    runner.go         Run lifecycle, async execution, node hot-swap
+    watcher.go        fsnotify hot reload (debounced, 200ms)
+    store.go          SQLite run history persistence
+    retry.go          Exponential backoff with ±25% jitter
     context.go        RunContext, template rendering, type preservation
-    stream.go         Event types, Run struct, StepResult
-    flow.go           Pipeline execution, switch/parallel/loop/map
-    executor.go       Per-type dispatch
-    executor_llm.go   Anthropic, Ollama, OpenAI (streaming + structured output)
+    stream.go         Event types, Run struct, StepResult (with token counts)
+    flow.go           Pipeline execution, switch/parallel/loop/map, on_error
+    executor.go       Per-type dispatch with retry wrapper
+    executor_llm.go   Anthropic (tool use loop), Ollama, OpenAI (SSE streaming)
     executor_http.go  HTTP requests + HTML stripping
     executor_search.go Brave API + SearXNG
     executor_file.go  File read/write/append/exists/delete/list
     executor_cmd.go   Command execution with streaming stdout
-    executor_xfm.go   Transform execution
-    executor_db.go    Database (stubbed)
-    executor_stt.go   STT (stubbed)
-    executor_tts.go   TTS (stubbed)
+    executor_xfm.go   Transform (Go template rendering)
+    executor_db.go    Database — SQLite + Postgres via database/sql
+    executor_stt.go   STT — Deepgram pre-recorded + OpenAI Whisper
+    executor_tts.go   TTS — ElevenLabs + OpenAI (returns base64 audio)
   nodes/
     llm_chat/
     classify_intent/
@@ -647,14 +792,17 @@ lcdata/
 
 ```
 github.com/anthropics/anthropic-sdk-go  v0.2.0-alpha.4
+github.com/fsnotify/fsnotify            v1.9.0
 github.com/go-chi/chi/v5                v5.2.3
 github.com/go-chi/cors                  v1.2.2
 github.com/golang-jwt/jwt/v5            v5.3.0
 github.com/gorilla/websocket            v1.5.3
+github.com/lib/pq                       v1.10.9
 github.com/spf13/cobra                  v1.8.0
+modernc.org/sqlite                      v1.37.0
 ```
 
-Go 1.23+
+Go 1.23+ (uses `log/slog`, `math/rand/v2`)
 
 ---
 
