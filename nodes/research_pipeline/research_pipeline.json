@@ -1,0 +1,55 @@
+{
+  "name": "research_pipeline",
+  "description": "Full research pipeline: web search → fetch top pages → summarize each → synthesize a final answer",
+  "type": "pipeline",
+  "steps": [
+    {
+      "id": "search",
+      "node": "web_search",
+      "input": {
+        "query": "{{.input.query}}"
+      }
+    },
+    {
+      "id": "fetch_pages",
+      "map": {
+        "over": "{{.search.results}}",
+        "as": "result",
+        "node": "fetch_url",
+        "concurrency": 3,
+        "input": {
+          "url": "{{.result.url}}"
+        },
+        "collect_as": "pages"
+      }
+    },
+    {
+      "id": "summaries",
+      "map": {
+        "over": "{{.pages}}",
+        "as": "page",
+        "node": "summarize",
+        "concurrency": 3,
+        "input": {
+          "message": "{{.page.body}}"
+        },
+        "collect_as": "page_summaries"
+      }
+    },
+    {
+      "id": "synthesize",
+      "node": "llm_chat",
+      "input": {
+        "message": "You are a research assistant. Based on these web page summaries, write a comprehensive answer to: \"{{.input.query}}\"\n\nSummaries:\n{{.page_summaries | toJSON}}"
+      }
+    }
+  ],
+  "output": {
+    "response":       "{{.synthesize.response}}",
+    "search_results": "{{.search.results}}",
+    "summaries":      "{{.page_summaries}}"
+  },
+  "input": {
+    "query": { "type": "string", "required": true }
+  }
+}

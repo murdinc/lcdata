@@ -1,0 +1,24 @@
+{
+  "name": "classify_sentiment",
+  "description": "Classifies the sentiment of text as positive, negative, or neutral with a confidence score",
+  "type": "llm",
+  "provider": "anthropic",
+  "model": "claude-haiku-4-5-20251001",
+  "system_prompt_file": "system.md",
+  "temperature": 0.1,
+  "max_tokens": 256,
+  "structured_output": {
+    "sentiment":   { "type": "string" },
+    "confidence":  { "type": "number" },
+    "explanation": { "type": "string" }
+  },
+  "input": {
+    "message": { "type": "string", "required": true, "description": "Text to classify" }
+  },
+  "output": {
+    "sentiment":   { "type": "string", "description": "positive, negative, or neutral" },
+    "confidence":  { "type": "number", "description": "0.0 to 1.0" },
+    "explanation": { "type": "string" },
+    "response":    { "type": "string" }
+  }
+}

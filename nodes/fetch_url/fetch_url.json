@@ -1,0 +1,18 @@
+{
+  "name": "fetch_url",
+  "description": "Fetches a URL and returns the response as plain text (HTML stripped)",
+  "type": "http",
+  "method": "GET",
+  "url": "{{.input.url}}",
+  "strip_html": true,
+  "headers": {
+    "User-Agent": "Mozilla/5.0 (compatible; lcdata/1.0)"
+  },
+  "input": {
+    "url": { "type": "string", "required": true }
+  },
+  "output": {
+    "status": { "type": "number" },
+    "body":   { "type": "string" }
+  }
+}

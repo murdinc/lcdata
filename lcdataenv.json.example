@@ -1,0 +1,22 @@
+{
+  "environments": {
+    "default": {
+      "anthropicKey": "sk-ant-...",
+      "ollamaEndpoint": "http://localhost:11434",
+      "openaiKey": "sk-...",
+      "elevenlabsKey": "",
+      "deepgramKey": "",
+      "braveKey": "BSA...",
+      "searxngEndpoint": "http://localhost:8888",
+      "dbConnections": {
+        "main": "postgres://user:pass@localhost:5432/mydb"
+      }
+    },
+    "production": {
+      "anthropicKey": "sk-ant-...",
+      "dbConnections": {
+        "main": "postgres://user:pass@prod-host:5432/mydb?sslmode=require"
+      }
+    }
+  }
+}

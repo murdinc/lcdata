@@ -1,0 +1,16 @@
+{
+  "name": "translate",
+  "description": "Translates text to a target language. Pass message as: 'Translate to [language]: [text]'",
+  "type": "llm",
+  "provider": "anthropic",
+  "model": "claude-haiku-4-5-20251001",
+  "system_prompt_file": "system.md",
+  "temperature": 0.2,
+  "max_tokens": 4096,
+  "input": {
+    "message": { "type": "string", "required": true, "description": "Format: 'Translate to [language]: [text to translate]'" }
+  },
+  "output": {
+    "response": { "type": "string" }
+  }
+}

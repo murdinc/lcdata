@@ -1,0 +1,19 @@
+{
+  "name": "llm_chat",
+  "description": "General-purpose chat agent using Claude",
+  "type": "llm",
+  "provider": "anthropic",
+  "model": "claude-sonnet-4-6",
+  "system_prompt_file": "system.md",
+  "temperature": 0.7,
+  "max_tokens": 4096,
+  "stream": true,
+  "input": {
+    "message": { "type": "string", "required": true },
+    "history":  { "type": "[]message", "required": false }
+  },
+  "output": {
+    "response": { "type": "string" },
+    "usage":    { "type": "object" }
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "name": "read_file",
+  "description": "Reads the contents of a file from disk",
+  "type": "file",
+  "operation": "read",
+  "input": {
+    "path": { "type": "string", "required": true }
+  },
+  "output": {
+    "content": { "type": "string" },
+    "path":    { "type": "string" },
+    "size":    { "type": "number" }
+  }
+}

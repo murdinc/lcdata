@@ -1,0 +1,15 @@
+{
+  "name": "write_file",
+  "description": "Writes content to a file on disk (overwrites if exists)",
+  "type": "file",
+  "operation": "write",
+  "input": {
+    "path":    { "type": "string", "required": true },
+    "content": { "type": "string", "required": true }
+  },
+  "output": {
+    "path":          { "type": "string" },
+    "bytes_written": { "type": "number" },
+    "ok":            { "type": "boolean" }
+  }
+}

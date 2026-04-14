@@ -1,0 +1,28 @@
+{
+  "name": "extract_entities",
+  "description": "Extracts named entities (people, organizations, locations, dates) from text as structured JSON",
+  "type": "llm",
+  "provider": "anthropic",
+  "model": "claude-haiku-4-5-20251001",
+  "system_prompt_file": "system.md",
+  "temperature": 0.1,
+  "max_tokens": 2048,
+  "structured_output": {
+    "people":        { "type": "array" },
+    "organizations": { "type": "array" },
+    "locations":     { "type": "array" },
+    "dates":         { "type": "array" },
+    "topics":        { "type": "array" }
+  },
+  "input": {
+    "message": { "type": "string", "required": true, "description": "The text to extract entities from" }
+  },
+  "output": {
+    "people":        { "type": "array" },
+    "organizations": { "type": "array" },
+    "locations":     { "type": "array" },
+    "dates":         { "type": "array" },
+    "topics":        { "type": "array" },
+    "response":      { "type": "string" }
+  }
+}

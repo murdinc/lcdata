@@ -1,0 +1,16 @@
+{
+  "name": "summarize",
+  "description": "Summarizes a block of text into a concise paragraph",
+  "type": "llm",
+  "provider": "anthropic",
+  "model": "claude-haiku-4-5-20251001",
+  "system_prompt_file": "system.md",
+  "temperature": 0.3,
+  "max_tokens": 1024,
+  "input": {
+    "message": { "type": "string", "required": true, "description": "The text to summarize" }
+  },
+  "output": {
+    "response": { "type": "string" }
+  }
+}

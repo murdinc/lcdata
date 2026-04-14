@@ -1,0 +1,45 @@
+{
+  "name": "smart_assistant",
+  "description": "Intent-routing assistant: classifies user intent then routes to research (web search+synthesis), translation, or general chat",
+  "type": "pipeline",
+  "steps": [
+    {
+      "id": "classify",
+      "node": "classify_intent",
+      "input": {
+        "message": "{{.input.message}}"
+      }
+    },
+    {
+      "id": "handle",
+      "switch": "{{.classify.intent}}",
+      "cases": {
+        "search": {
+          "node": "research_pipeline",
+          "input": {
+            "query": "{{.input.message}}"
+          }
+        },
+        "translate": {
+          "node": "translate",
+          "input": {
+            "message": "{{.input.message}}"
+          }
+        },
+        "default": {
+          "node": "llm_chat",
+          "input": {
+            "message": "{{.input.message}}"
+          }
+        }
+      }
+    }
+  ],
+  "output": {
+    "response": "{{.handle.response}}",
+    "intent":   "{{.classify.intent}}"
+  },
+  "input": {
+    "message": { "type": "string", "required": true }
+  }
+}

@@ -1,0 +1,65 @@
+{
+  "name": "analyze_document",
+  "description": "Document analysis pipeline: reads a file, extracts entities and summarizes it in parallel, then writes a structured analysis report",
+  "type": "pipeline",
+  "steps": [
+    {
+      "id": "read",
+      "node": "read_file",
+      "input": {
+        "path": "{{.input.input_path}}"
+      }
+    },
+    {
+      "id": "analyze",
+      "parallel": [
+        {
+          "id": "summary",
+          "node": "summarize",
+          "input": {
+            "message": "{{.read.content}}"
+          }
+        },
+        {
+          "id": "entities",
+          "node": "extract_entities",
+          "input": {
+            "message": "{{.read.content}}"
+          }
+        },
+        {
+          "id": "sentiment",
+          "node": "classify_sentiment",
+          "input": {
+            "message": "{{.read.content}}"
+          }
+        }
+      ]
+    },
+    {
+      "id": "compose",
+      "node": "llm_chat",
+      "input": {
+        "message": "Create a structured analysis report for a document. Combine the following analysis results into a clean, readable markdown report:\n\nSUMMARY:\n{{.analyze.summary.response}}\n\nENTITIES:\n{{.analyze.entities.response}}\n\nSENTIMENT:\n{{.analyze.sentiment.sentiment}} (confidence: {{.analyze.sentiment.confidence}})\n{{.analyze.sentiment.explanation}}\n\nFormat as a professional document analysis report with clear sections."
+      }
+    },
+    {
+      "id": "write",
+      "node": "write_file",
+      "input": {
+        "path":    "{{.input.output_path}}",
+        "content": "{{.compose.response}}"
+      }
+    }
+  ],
+  "output": {
+    "report":     "{{.compose.response}}",
+    "output_path": "{{.input.output_path}}",
+    "summary":    "{{.analyze.summary.response}}",
+    "sentiment":  "{{.analyze.sentiment.sentiment}}"
+  },
+  "input": {
+    "input_path":  { "type": "string", "required": true, "description": "Path to the document to analyze" },
+    "output_path": { "type": "string", "required": true, "description": "Path to write the analysis report" }
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "name": "classify_intent",
+  "description": "Classifies user input into one of: search, database, chat, command",
+  "type": "llm",
+  "provider": "anthropic",
+  "model": "claude-haiku-4-5",
+  "system_prompt_file": "system.md",
+  "temperature": 0.1,
+  "max_tokens": 50,
+  "stream": false,
+  "input": {
+    "text": { "type": "string", "required": true }
+  },
+  "output": {
+    "intent":     { "type": "string" },
+    "confidence": { "type": "number" }
+  }
+}
