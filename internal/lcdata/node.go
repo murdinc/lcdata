@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // NodeType identifies how a node is executed
@@ -70,6 +71,9 @@ type rawNode struct {
 
 	Operation string `json:"operation,omitempty"`
 
+	RetryCount int    `json:"retry_count,omitempty"`
+	RetryDelay string `json:"retry_delay,omitempty"`
+
 	Template string `json:"template,omitempty"`
 	Steps    []Step `json:"steps,omitempty"`
 
@@ -116,6 +120,9 @@ type Node struct {
 	SearchCount    int    `json:"search_count,omitempty"`
 
 	Operation string `json:"operation,omitempty"`
+
+	RetryCount int    `json:"retry_count,omitempty"`
+	RetryDelay string `json:"retry_delay,omitempty"`
 
 	Template string `json:"template,omitempty"`
 	Steps    []Step `json:"steps,omitempty"`
@@ -230,6 +237,8 @@ func parseNodeJSON(data []byte) (*Node, error) {
 		SearchProvider:   raw.SearchProvider,
 		SearchCount:      raw.SearchCount,
 		Operation:        raw.Operation,
+		RetryCount:       raw.RetryCount,
+		RetryDelay:       raw.RetryDelay,
 		Template:         raw.Template,
 		Steps:            raw.Steps,
 		Input:            raw.Input,
@@ -333,6 +342,27 @@ func (n *Node) validate() error {
 		if len(n.Steps) == 0 {
 			return fmt.Errorf("steps are required for pipeline nodes")
 		}
+	}
+	return nil
+}
+
+// validateInputs checks that all required input fields are present and non-empty.
+func validateInputs(node *Node, inputs map[string]any) error {
+	if len(node.Input) == 0 {
+		return nil
+	}
+	var missing []string
+	for name, schema := range node.Input {
+		if !schema.Required {
+			continue
+		}
+		v, ok := inputs[name]
+		if !ok || v == nil || v == "" {
+			missing = append(missing, name)
+		}
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("missing required input field(s): %s", strings.Join(missing, ", "))
 	}
 	return nil
 }

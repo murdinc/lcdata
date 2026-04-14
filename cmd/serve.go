@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
+	"sync"
 	"syscall"
 	"time"
 
@@ -34,19 +36,39 @@ var serveCmd = &cobra.Command{
 			cfg.Port = servePort
 		}
 
+		logger := lcdata.NewLogger(cfg.LogLevel)
+
 		nodes, err := lcdata.LoadNodes(cfg.NodesPath)
 		if err != nil {
 			return err
 		}
-		log.Printf("Loaded %d nodes from %s", len(nodes), cfg.NodesPath)
+		logger.Info("nodes loaded", "count", len(nodes), "path", cfg.NodesPath)
 
 		envCfg, err := lcdata.LoadEnvironmentConfigs()
 		if err != nil {
 			return err
 		}
 
-		runner := lcdata.NewRunner(nodes, envCfg, cfg)
-		srv := newServer(cfg, nodes, runner)
+		runner := lcdata.NewRunner(nodes, envCfg, cfg, logger)
+
+		store, err := lcdata.OpenStore(cfg.StorePath)
+		if err != nil {
+			logger.Error("failed to open store", "path", cfg.StorePath, "error", err)
+			return err
+		}
+		defer store.Close()
+		runner.SetStore(store)
+		logger.Info("store opened", "path", cfg.StorePath)
+
+		// Start hot-reload watcher for the nodes directory
+		watchCtx, watchCancel := context.WithCancel(context.Background())
+		defer watchCancel()
+		if err := lcdata.WatchNodes(watchCtx, cfg.NodesPath, runner, logger); err != nil {
+			logger.Error("failed to start node watcher", "error", err)
+			// non-fatal: continue without hot reload
+		}
+
+		srv := newServer(cfg, runner, logger)
 
 		server := &http.Server{
 			Addr:    fmt.Sprintf(":%d", cfg.Port),
@@ -58,14 +80,15 @@ var serveCmd = &cobra.Command{
 		signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 
 		go func() {
-			log.Printf("lcdata serving on :%d", cfg.Port)
+			logger.Info("lcdata serving", "port", cfg.Port)
 			if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-				log.Fatalf("server error: %v", err)
+				logger.Error("server error", "error", err)
+				os.Exit(1)
 			}
 		}()
 
 		<-stop
-		log.Println("Shutting down...")
+		logger.Info("shutting down")
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		return server.Shutdown(ctx)
@@ -82,7 +105,7 @@ var wsUpgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool { return true },
 }
 
-func newServer(cfg *lcdata.Config, nodes lcdata.Nodes, runner *lcdata.Runner) http.Handler {
+func newServer(cfg *lcdata.Config, runner *lcdata.Runner, logger *slog.Logger) http.Handler {
 	r := chi.NewRouter()
 
 	r.Use(middleware.Logger)
@@ -97,17 +120,20 @@ func newServer(cfg *lcdata.Config, nodes lcdata.Nodes, runner *lcdata.Runner) ht
 	if cfg.RequireJWT {
 		r.Use(jwtMiddleware(cfg.JWTSecret))
 	}
+	if cfg.RateLimitRPS > 0 {
+		r.Use(rateLimitMiddleware(cfg.RateLimitRPS, cfg.RateLimitBurst))
+	}
 
 	// Discovery
 	r.Get("/api/health", handleHealth(cfg))
-	r.Get("/api/info", handleInfo(cfg, nodes))
-	r.Get("/api/nodes", handleListNodes(nodes))
-	r.Get("/api/nodes/{name}", handleGetNode(nodes))
+	r.Get("/api/info", handleInfo(cfg, runner))
+	r.Get("/api/nodes", handleListNodes(runner))
+	r.Get("/api/nodes/{name}", handleGetNode(runner))
 
 	// Execution
 	r.Post("/api/nodes/{name}/run", handleRun(cfg, runner))
 	r.Post("/api/nodes/{name}/stream", handleStream(cfg, runner))
-	r.Get("/ws/nodes/{name}", handleWebSocket(cfg, runner))
+	r.Get("/ws/nodes/{name}", handleWebSocket(cfg, runner, logger))
 
 	// Run management
 	r.Get("/api/runs", handleListRuns(runner))
@@ -118,6 +144,10 @@ func newServer(cfg *lcdata.Config, nodes lcdata.Nodes, runner *lcdata.Runner) ht
 }
 
 // --- middleware ---
+
+type contextKey string
+
+const claimsKey contextKey = "jwt_claims"
 
 func jwtMiddleware(secret string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
@@ -140,7 +170,7 @@ func jwtMiddleware(secret string) func(http.Handler) http.Handler {
 				return
 			}
 
-			_, err := jwt.Parse(tokenStr, func(t *jwt.Token) (any, error) {
+			token, err := jwt.Parse(tokenStr, func(t *jwt.Token) (any, error) {
 				if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
 					return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
 				}
@@ -151,6 +181,104 @@ func jwtMiddleware(secret string) func(http.Handler) http.Handler {
 				return
 			}
 
+			// Store claims in context for downstream use (node scope check)
+			ctx := context.WithValue(r.Context(), claimsKey, token.Claims)
+			next.ServeHTTP(w, r.WithContext(ctx))
+		})
+	}
+}
+
+// nodeAllowed checks whether the JWT claims permit access to the named node.
+// If allowed_nodes is absent or empty, all nodes are allowed.
+func nodeAllowed(r *http.Request, nodeName string) bool {
+	claims, ok := r.Context().Value(claimsKey).(jwt.MapClaims)
+	if !ok {
+		return true // no JWT auth active
+	}
+	allowedRaw, ok := claims["allowed_nodes"]
+	if !ok {
+		return true // no restriction in token
+	}
+	allowed, ok := allowedRaw.([]any)
+	if !ok || len(allowed) == 0 {
+		return true
+	}
+	for _, v := range allowed {
+		if s, ok := v.(string); ok && s == nodeName {
+			return true
+		}
+	}
+	return false
+}
+
+// --- rate limiter ---
+
+// tokenBucket is a simple per-key token bucket.
+type tokenBucket struct {
+	mu      sync.Mutex
+	buckets map[string]*bucket
+	rps     float64
+	burst   int
+}
+
+type bucket struct {
+	tokens   float64
+	lastFill time.Time
+}
+
+func newTokenBucket(rps, burst int) *tokenBucket {
+	return &tokenBucket{
+		buckets: make(map[string]*bucket),
+		rps:     float64(rps),
+		burst:   burst,
+	}
+}
+
+func (tb *tokenBucket) allow(key string) (bool, time.Duration) {
+	tb.mu.Lock()
+	defer tb.mu.Unlock()
+
+	now := time.Now()
+	b, ok := tb.buckets[key]
+	if !ok {
+		b = &bucket{tokens: float64(tb.burst), lastFill: now}
+		tb.buckets[key] = b
+	}
+
+	elapsed := now.Sub(b.lastFill).Seconds()
+	b.tokens = min(float64(tb.burst), b.tokens+elapsed*tb.rps)
+	b.lastFill = now
+
+	if b.tokens >= 1 {
+		b.tokens--
+		return true, 0
+	}
+	retryAfter := time.Duration((1-b.tokens)/tb.rps*1000) * time.Millisecond
+	return false, retryAfter
+}
+
+func rateLimitMiddleware(rps, burst int) func(http.Handler) http.Handler {
+	if burst <= 0 {
+		burst = rps * 2
+	}
+	limiter := newTokenBucket(rps, burst)
+
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Key by JWT sub claim, fall back to IP
+			key := r.RemoteAddr
+			if claims, ok := r.Context().Value(claimsKey).(jwt.MapClaims); ok {
+				if sub, ok := claims["sub"].(string); ok && sub != "" {
+					key = sub
+				}
+			}
+
+			allowed, retryAfter := limiter.allow(key)
+			if !allowed {
+				w.Header().Set("Retry-After", strconv.Itoa(int(retryAfter.Seconds()+1)))
+				writeError(w, http.StatusTooManyRequests, "rate limit exceeded")
+				return
+			}
 			next.ServeHTTP(w, r)
 		})
 	}
@@ -167,8 +295,9 @@ func handleHealth(cfg *lcdata.Config) http.HandlerFunc {
 	}
 }
 
-func handleInfo(cfg *lcdata.Config, nodes lcdata.Nodes) http.HandlerFunc {
+func handleInfo(cfg *lcdata.Config, runner *lcdata.Runner) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		nodes := runner.Nodes()
 		nodeTypes := []string{"llm", "stt", "tts", "command", "database", "http", "transform", "pipeline"}
 		writeJSON(w, http.StatusOK, map[string]any{
 			"version":     Version,
@@ -180,8 +309,9 @@ func handleInfo(cfg *lcdata.Config, nodes lcdata.Nodes) http.HandlerFunc {
 	}
 }
 
-func handleListNodes(nodes lcdata.Nodes) http.HandlerFunc {
+func handleListNodes(runner *lcdata.Runner) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		nodes := runner.Nodes()
 		summaries := make([]map[string]any, len(nodes))
 		for i, n := range nodes {
 			summaries[i] = n.Summary()
@@ -193,10 +323,10 @@ func handleListNodes(nodes lcdata.Nodes) http.HandlerFunc {
 	}
 }
 
-func handleGetNode(nodes lcdata.Nodes) http.HandlerFunc {
+func handleGetNode(runner *lcdata.Runner) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		name := chi.URLParam(r, "name")
-		node, err := nodes.Get(name)
+		node, err := runner.Nodes().Get(name)
 		if err != nil {
 			writeError(w, http.StatusNotFound, err.Error())
 			return
@@ -208,6 +338,10 @@ func handleGetNode(nodes lcdata.Nodes) http.HandlerFunc {
 func handleRun(cfg *lcdata.Config, runner *lcdata.Runner) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		name := chi.URLParam(r, "name")
+		if !nodeAllowed(r, name) {
+			writeError(w, http.StatusForbidden, "token does not permit access to node: "+name)
+			return
+		}
 
 		var req lcdata.RunRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -235,6 +369,10 @@ func handleRun(cfg *lcdata.Config, runner *lcdata.Runner) http.HandlerFunc {
 func handleStream(cfg *lcdata.Config, runner *lcdata.Runner) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		name := chi.URLParam(r, "name")
+		if !nodeAllowed(r, name) {
+			writeError(w, http.StatusForbidden, "token does not permit access to node: "+name)
+			return
+		}
 
 		var req lcdata.RunRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -267,13 +405,17 @@ func handleStream(cfg *lcdata.Config, runner *lcdata.Runner) http.HandlerFunc {
 	}
 }
 
-func handleWebSocket(cfg *lcdata.Config, runner *lcdata.Runner) http.HandlerFunc {
+func handleWebSocket(cfg *lcdata.Config, runner *lcdata.Runner, logger *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		name := chi.URLParam(r, "name")
+		if !nodeAllowed(r, name) {
+			writeError(w, http.StatusForbidden, "token does not permit access to node: "+name)
+			return
+		}
 
 		conn, err := wsUpgrader.Upgrade(w, r, nil)
 		if err != nil {
-			log.Printf("websocket upgrade error: %v", err)
+			logger.Error("websocket upgrade error", "error", err)
 			return
 		}
 		defer conn.Close()
@@ -281,7 +423,7 @@ func handleWebSocket(cfg *lcdata.Config, runner *lcdata.Runner) http.HandlerFunc
 		// Read the run request from the first WS message
 		var req lcdata.RunRequest
 		if err := conn.ReadJSON(&req); err != nil {
-			log.Printf("websocket read error: %v", err)
+			logger.Error("websocket read error", "error", err)
 			return
 		}
 
@@ -296,7 +438,7 @@ func handleWebSocket(cfg *lcdata.Config, runner *lcdata.Runner) http.HandlerFunc
 
 		for event := range run.Events {
 			if err := conn.WriteJSON(event); err != nil {
-				log.Printf("websocket write error: %v", err)
+				logger.Error("websocket write error", "run_id", run.ID, "error", err)
 				runner.CancelRun(run.ID)
 				return
 			}

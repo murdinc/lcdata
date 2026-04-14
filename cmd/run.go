@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"os"
 	"strings"
 
 	"github.com/murdinc/lcdata/internal/lcdata"
@@ -45,17 +47,31 @@ Input values are passed as key=value pairs:
 			envName = cfg.Env
 		}
 
-		// Parse --input key=value flags
+		// Parse --input key=value flags; key=- reads the value from stdin
 		inputs := make(map[string]any)
+		stdinRead := false
 		for _, kv := range runInputs {
 			parts := strings.SplitN(kv, "=", 2)
 			if len(parts) != 2 {
 				return fmt.Errorf("invalid input format %q — use key=value", kv)
 			}
-			inputs[parts[0]] = parts[1]
+			key, val := parts[0], parts[1]
+			if val == "-" {
+				if stdinRead {
+					return fmt.Errorf("stdin (-) can only be used for one input field")
+				}
+				data, err := io.ReadAll(os.Stdin)
+				if err != nil {
+					return fmt.Errorf("failed to read stdin: %w", err)
+				}
+				inputs[key] = strings.TrimRight(string(data), "\n")
+				stdinRead = true
+			} else {
+				inputs[key] = val
+			}
 		}
 
-		runner := lcdata.NewRunner(nodes, envCfg, cfg)
+		runner := lcdata.NewRunner(nodes, envCfg, cfg, nil)
 
 		req := lcdata.RunRequest{
 			Input: inputs,

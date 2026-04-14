@@ -14,11 +14,14 @@ type Config struct {
 	JWTSecret         string `json:"jwt_secret"`
 	RequireJWT        bool   `json:"require_jwt"`
 	NodesPath         string `json:"nodes_path"`
+	StorePath         string `json:"store_path"`
 	Env               string `json:"env"`
 	LogLevel          string `json:"log_level"`
 	MaxConcurrentRuns int    `json:"max_concurrent_runs"`
 	RunTimeout        string `json:"run_timeout"`
 	RunHistory        int    `json:"run_history"`
+	RateLimitRPS      int    `json:"rate_limit_rps"`
+	RateLimitBurst    int    `json:"rate_limit_burst"`
 
 	RunTimeoutDuration time.Duration `json:"-"`
 }
@@ -29,11 +32,14 @@ func DefaultConfig() *Config {
 		JWTSecret:         "change-this-in-production",
 		RequireJWT:        true,
 		NodesPath:         "./nodes",
+		StorePath:         "./lcdata.db",
 		Env:               "default",
 		LogLevel:          "info",
 		MaxConcurrentRuns: 10,
 		RunTimeout:        "5m",
 		RunHistory:        100,
+		RateLimitRPS:      0, // 0 = disabled
+		RateLimitBurst:    0,
 	}
 }
 

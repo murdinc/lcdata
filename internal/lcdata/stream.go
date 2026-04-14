@@ -19,6 +19,7 @@ const (
 	EventChunk         EventType = "chunk"
 	EventLoopIteration EventType = "loop_iteration"
 	EventMapProgress   EventType = "map_progress"
+	EventRetry         EventType = "retry"
 )
 
 // Event is a single streaming event emitted during a run
@@ -63,21 +64,29 @@ type StepResult struct {
 	StartedAt  time.Time `json:"started_at"`
 	EndedAt    time.Time `json:"ended_at"`
 	DurationMS int64     `json:"duration_ms"`
+
+	// LLM token usage for this step
+	InputTokens  int64 `json:"input_tokens,omitempty"`
+	OutputTokens int64 `json:"output_tokens,omitempty"`
 }
 
 // Run is the full record of one execution
 type Run struct {
-	ID         string            `json:"run_id"`
-	Node       string            `json:"node"`
-	Env        string            `json:"env"`
-	Status     RunStatus         `json:"status"`
-	Input      map[string]any    `json:"input"`
-	Output     map[string]any    `json:"output,omitempty"`
-	Steps      []StepResult      `json:"steps,omitempty"`
-	Error      string            `json:"error,omitempty"`
-	StartedAt  time.Time         `json:"started_at"`
-	EndedAt    time.Time         `json:"ended_at,omitempty"`
-	DurationMS int64             `json:"duration_ms,omitempty"`
+	ID         string         `json:"run_id"`
+	Node       string         `json:"node"`
+	Env        string         `json:"env"`
+	Status     RunStatus      `json:"status"`
+	Input      map[string]any `json:"input"`
+	Output     map[string]any `json:"output,omitempty"`
+	Steps      []StepResult   `json:"steps,omitempty"`
+	Error      string         `json:"error,omitempty"`
+	StartedAt  time.Time      `json:"started_at"`
+	EndedAt    time.Time      `json:"ended_at,omitempty"`
+	DurationMS int64          `json:"duration_ms,omitempty"`
+
+	// Token cost tracking (aggregated across all LLM steps)
+	InputTokens  int64 `json:"input_tokens,omitempty"`
+	OutputTokens int64 `json:"output_tokens,omitempty"`
 
 	// Runtime-only: channel for subscribers to receive events
 	Events chan Event `json:"-"`

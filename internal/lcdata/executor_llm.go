@@ -1,6 +1,7 @@
 package lcdata
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -21,11 +22,12 @@ func executeLLM(
 	inputs map[string]any,
 	env EnvironmentConfig,
 	events chan<- Event,
+	allNodes Nodes,
 ) (map[string]any, error) {
 
 	switch strings.ToLower(node.Provider) {
 	case "anthropic":
-		return executeLLMAnthropic(ctx, node, runID, inputs, env, events)
+		return executeLLMAnthropic(ctx, node, runID, inputs, env, events, allNodes)
 	case "ollama":
 		return executeLLMOllama(ctx, node, runID, inputs, env, events)
 	case "openai":
@@ -43,6 +45,7 @@ func executeLLMAnthropic(
 	inputs map[string]any,
 	env EnvironmentConfig,
 	events chan<- Event,
+	allNodes Nodes,
 ) (map[string]any, error) {
 
 	if env.AnthropicKey == "" {
@@ -104,44 +107,114 @@ func executeLLMAnthropic(
 		})
 	}
 
-	// Stream or single call
-	if node.Stream {
+	// Build tool definitions from referenced nodes
+	toolDefs := buildAnthropicToolDefs(node.Tools, allNodes)
+	if len(toolDefs) > 0 {
+		params.Tools = anthropic.F(toolDefs)
+	}
+
+	// Stream (only supported without tools for now)
+	if node.Stream && len(toolDefs) == 0 {
 		return executeLLMAnthropicStream(ctx, client, params, node, runID, events)
 	}
 
-	resp, err := client.Messages.New(ctx, params)
-	if err != nil {
-		return nil, fmt.Errorf("anthropic API error: %w", err)
-	}
+	// Agentic tool-use loop — max 10 turns to prevent infinite loops
+	var totalInputTokens, totalOutputTokens int64
+	const maxToolTurns = 10
 
-	var sb strings.Builder
-	for _, block := range resp.Content {
-		if block.Type == "text" {
-			sb.WriteString(block.Text)
+	for turn := 0; turn < maxToolTurns; turn++ {
+		resp, err := client.Messages.New(ctx, params)
+		if err != nil {
+			return nil, fmt.Errorf("anthropic API error: %w", err)
 		}
-	}
 
-	text := sb.String()
-	output := map[string]any{
-		"response": text,
-		"usage": map[string]any{
-			"input_tokens":  resp.Usage.InputTokens,
-			"output_tokens": resp.Usage.OutputTokens,
-		},
-		"stop_reason": string(resp.StopReason),
-	}
+		totalInputTokens += resp.Usage.InputTokens
+		totalOutputTokens += resp.Usage.OutputTokens
 
-	// If structured_output is defined, try to parse the response as JSON
-	// and merge the fields into the output map
-	if node.StructuredOutput != nil {
-		if parsed, err := parseJSONResponse(text); err == nil {
-			for k, v := range parsed {
-				output[k] = v
+		// Collect text and tool use blocks
+		var sb strings.Builder
+		var toolUseBlocks []anthropic.ContentBlock
+		for _, block := range resp.Content {
+			if block.Type == "text" {
+				sb.WriteString(block.Text)
+			} else if block.Type == "tool_use" {
+				toolUseBlocks = append(toolUseBlocks, block)
 			}
 		}
+
+		// If no tool calls, we're done
+		if len(toolUseBlocks) == 0 || resp.StopReason != "tool_use" {
+			text := sb.String()
+			output := map[string]any{
+				"response": text,
+				"usage": map[string]any{
+					"input_tokens":  totalInputTokens,
+					"output_tokens": totalOutputTokens,
+				},
+				"stop_reason": string(resp.StopReason),
+			}
+			if node.StructuredOutput != nil {
+				if parsed, err := parseJSONResponse(text); err == nil {
+					for k, v := range parsed {
+						output[k] = v
+					}
+				}
+			}
+			return output, nil
+		}
+
+		// Execute each tool call and collect results
+		assistantMsg := resp.ToParam()
+		var toolResults []anthropic.ToolResultBlockParam
+
+		for _, block := range toolUseBlocks {
+			toolName := block.Name
+			toolUseID := block.ID
+
+			events <- Event{
+				Event:     EventChunk,
+				RunID:     runID,
+				StepID:    node.Name,
+				Data:      fmt.Sprintf("[tool: %s]", toolName),
+				Timestamp: time.Now(),
+			}
+
+			// Resolve tool input from the block's JSON input
+			toolInputs := make(map[string]any)
+			if b, err := json.Marshal(block.Input); err == nil {
+				json.Unmarshal(b, &toolInputs)
+			}
+
+			// Find and execute the tool node
+			var resultContent string
+			if toolNode, err := allNodes.Get(toolName); err != nil {
+				resultContent = fmt.Sprintf("error: tool node %q not found", toolName)
+			} else {
+				toolRC := NewRunContext(runID, toolInputs)
+				toolOutput, toolErr := executeLeafNode(ctx, toolNode, toolRC, env, events, allNodes)
+				if toolErr != nil {
+					resultContent = fmt.Sprintf("error: %s", toolErr.Error())
+				} else {
+					b, _ := json.Marshal(toolOutput)
+					resultContent = string(b)
+				}
+			}
+
+			toolResults = append(toolResults, anthropic.NewToolResultBlock(toolUseID, resultContent, false))
+		}
+
+		// Append assistant message + tool results and continue the loop
+		userContent := make([]anthropic.MessageParamContentUnion, len(toolResults))
+		for i, tr := range toolResults {
+			userContent[i] = tr
+		}
+		currentMessages := params.Messages.Value
+		currentMessages = append(currentMessages, assistantMsg)
+		currentMessages = append(currentMessages, anthropic.NewUserMessage(userContent...))
+		params.Messages = anthropic.F(currentMessages)
 	}
 
-	return output, nil
+	return nil, fmt.Errorf("anthropic tool use exceeded maximum turns (%d)", maxToolTurns)
 }
 
 func executeLLMAnthropicStream(
@@ -223,6 +296,20 @@ func executeLLMOllama(
 
 	if node.SystemPromptText != "" {
 		messages = append(messages, ollamaMsg{Role: "system", Content: node.SystemPromptText})
+	}
+	// Add history if provided
+	if history, ok := inputs["history"]; ok {
+		if histSlice, ok := history.([]any); ok {
+			for _, h := range histSlice {
+				if hMap, ok := h.(map[string]any); ok {
+					role := stringVal(hMap, "role")
+					content := stringVal(hMap, "content")
+					if role != "" && content != "" {
+						messages = append(messages, ollamaMsg{Role: role, Content: content})
+					}
+				}
+			}
+		}
 	}
 	messages = append(messages, ollamaMsg{Role: "user", Content: message})
 
@@ -336,6 +423,20 @@ func executeLLMOpenAI(
 	if node.SystemPromptText != "" {
 		messages = append(messages, openAIMsg{Role: "system", Content: node.SystemPromptText})
 	}
+	// Add history if provided
+	if history, ok := inputs["history"]; ok {
+		if histSlice, ok := history.([]any); ok {
+			for _, h := range histSlice {
+				if hMap, ok := h.(map[string]any); ok {
+					role := stringVal(hMap, "role")
+					content := stringVal(hMap, "content")
+					if role != "" && content != "" {
+						messages = append(messages, openAIMsg{Role: role, Content: content})
+					}
+				}
+			}
+		}
+	}
 	messages = append(messages, openAIMsg{Role: "user", Content: message})
 
 	maxTokens := node.MaxTokens
@@ -347,7 +448,7 @@ func executeLLMOpenAI(
 		"model":      node.Model,
 		"messages":   messages,
 		"max_tokens": maxTokens,
-		"stream":     false,
+		"stream":     node.Stream,
 	}
 	if node.Temperature > 0 {
 		body["temperature"] = node.Temperature
@@ -366,6 +467,10 @@ func executeLLMOpenAI(
 		return nil, fmt.Errorf("openai request failed: %w", err)
 	}
 	defer resp.Body.Close()
+
+	if node.Stream {
+		return executeOpenAIStream(resp.Body, node, runID, events)
+	}
 
 	var result struct {
 		Choices []struct {
@@ -391,13 +496,129 @@ func executeLLMOpenAI(
 		return nil, fmt.Errorf("openai returned no choices")
 	}
 
-	return map[string]any{
-		"response": result.Choices[0].Message.Content,
+	text := result.Choices[0].Message.Content
+	output := map[string]any{
+		"response": text,
 		"usage": map[string]any{
 			"input_tokens":  result.Usage.PromptTokens,
 			"output_tokens": result.Usage.CompletionTokens,
 		},
+	}
+	if node.StructuredOutput != nil {
+		if parsed, err := parseJSONResponse(text); err == nil {
+			for k, v := range parsed {
+				output[k] = v
+			}
+		}
+	}
+	return output, nil
+}
+
+func executeOpenAIStream(body io.Reader, node *Node, runID string, events chan<- Event) (map[string]any, error) {
+	var sb strings.Builder
+	var promptTokens, completionTokens int
+
+	scanner := bufio.NewScanner(body)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		data := line[6:]
+		if data == "[DONE]" {
+			break
+		}
+		var chunk struct {
+			Choices []struct {
+				Delta struct {
+					Content string `json:"content"`
+				} `json:"delta"`
+			} `json:"choices"`
+			Usage *struct {
+				PromptTokens     int `json:"prompt_tokens"`
+				CompletionTokens int `json:"completion_tokens"`
+			} `json:"usage,omitempty"`
+		}
+		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
+			continue
+		}
+		if chunk.Usage != nil {
+			promptTokens = chunk.Usage.PromptTokens
+			completionTokens = chunk.Usage.CompletionTokens
+		}
+		if len(chunk.Choices) > 0 && chunk.Choices[0].Delta.Content != "" {
+			text := chunk.Choices[0].Delta.Content
+			sb.WriteString(text)
+			events <- Event{
+				Event:     EventChunk,
+				RunID:     runID,
+				StepID:    node.Name,
+				Data:      text,
+				Timestamp: time.Now(),
+			}
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("openai stream read error: %w", err)
+	}
+
+	return map[string]any{
+		"response": sb.String(),
+		"usage": map[string]any{
+			"input_tokens":  promptTokens,
+			"output_tokens": completionTokens,
+		},
 	}, nil
+}
+
+// buildAnthropicToolDefs converts node names to Anthropic tool definitions,
+// building the input_schema from each node's declared input fields.
+func buildAnthropicToolDefs(toolNames []string, allNodes Nodes) []anthropic.ToolParam {
+	if len(toolNames) == 0 || len(allNodes) == 0 {
+		return nil
+	}
+
+	var defs []anthropic.ToolParam
+	for _, name := range toolNames {
+		toolNode, err := allNodes.Get(name)
+		if err != nil {
+			continue
+		}
+
+		// Build JSON Schema properties from input field schemas
+		properties := make(map[string]any)
+		required := []string{}
+		for fieldName, schema := range toolNode.Input {
+			prop := map[string]any{"type": schema.Type}
+			if schema.Type == "" {
+				prop["type"] = "string"
+			}
+			properties[fieldName] = prop
+			if schema.Required {
+				required = append(required, fieldName)
+			}
+		}
+
+		inputSchema := map[string]any{
+			"type":       "object",
+			"properties": properties,
+		}
+		if len(required) > 0 {
+			inputSchema["required"] = required
+		}
+
+		schemaBytes, _ := json.Marshal(inputSchema)
+
+		defs = append(defs, anthropic.ToolParam{
+			Name:        anthropic.F(toolNode.Name),
+			Description: anthropic.F(toolNode.Description),
+			InputSchema: anthropic.F[any](anthropic.ToolInputSchemaParam{
+				Type:       anthropic.F(anthropic.ToolInputSchemaTypeObject),
+				Properties: anthropic.F[any](json.RawMessage(schemaBytes)),
+			}),
+		})
+	}
+	return defs
 }
 
 // parseJSONResponse extracts a JSON object from an LLM response.

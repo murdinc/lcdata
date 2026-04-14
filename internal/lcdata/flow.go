@@ -125,7 +125,7 @@ func executeSimpleStep(
 	if node.Type == NodeTypePipeline {
 		output, _, execErr = executePipeline(ctx, node, childRC, nodes, env, events)
 	} else {
-		output, execErr = executeLeafNode(ctx, node, childRC, env, events)
+		output, execErr = executeLeafNode(ctx, node, childRC, env, events, nodes)
 	}
 
 	ended := time.Now()
@@ -140,6 +140,24 @@ func executeSimpleStep(
 	}
 
 	if execErr != nil {
+		// If on_error is set, run the error handler node instead of aborting
+		if step.OnError != "" {
+			errSteps, handlerOutput, handlerErr := runOnError(ctx, step, execErr, rc, nodes, env, events, runID)
+			allResults := []StepResult{result}
+			allResults = append(allResults, errSteps...)
+			if handlerErr != nil {
+				result.Status = RunStatusFailed
+				result.Error = execErr.Error()
+				return allResults, execErr
+			}
+			// Write handler output under the original step ID so templates keep working
+			rc.SetStepOutput(step.ID, handlerOutput)
+			result.Status = RunStatusCompleted
+			result.Output = handlerOutput
+			result.Error = execErr.Error() // preserve original error for transparency
+			return allResults, nil
+		}
+
 		result.Status = RunStatusFailed
 		result.Error = execErr.Error()
 		events <- Event{
@@ -156,6 +174,9 @@ func executeSimpleStep(
 
 	// Write output to main context under step ID namespace
 	rc.SetStepOutput(step.ID, output)
+
+	// Extract token usage if the node reported it
+	result.InputTokens, result.OutputTokens = extractTokenUsage(output)
 
 	result.Status = RunStatusCompleted
 	result.Output = output
@@ -466,4 +487,80 @@ func normalizeSwitchValue(v string) string {
 	}
 
 	return v
+}
+
+// runOnError runs the on_error handler node when a step fails.
+// Returns the handler's StepResults, its output map, and any error from the handler.
+func runOnError(
+	ctx context.Context,
+	step Step,
+	originalErr error,
+	rc *RunContext,
+	nodes Nodes,
+	env EnvironmentConfig,
+	events chan<- Event,
+	runID string,
+) ([]StepResult, map[string]any, error) {
+	handlerID := step.ID + ".error_handler"
+	handlerStep := Step{
+		ID:   handlerID,
+		Node: step.OnError,
+		Input: map[string]string{
+			"error":   originalErr.Error(),
+			"step_id": step.ID,
+		},
+	}
+
+	steps, err := executeSimpleStep(ctx, handlerStep, rc, nodes, env, events, runID)
+	if err != nil {
+		return steps, nil, err
+	}
+
+	// Pull handler output from the context it wrote into
+	output := make(map[string]any)
+	snap := rc.Snapshot()
+	parts := strings.Split(handlerID, ".")
+	if v := lookupPath(snap, parts); v != nil {
+		if m, ok := v.(map[string]any); ok {
+			output = m
+		}
+	}
+	return steps, output, nil
+}
+
+// extractTokenUsage pulls input/output token counts from an LLM output map.
+// LLM nodes return: {"usage": {"input_tokens": N, "output_tokens": N}}
+func extractTokenUsage(output map[string]any) (inputTokens, outputTokens int64) {
+	if output == nil {
+		return
+	}
+	usage, ok := output["usage"]
+	if !ok {
+		return
+	}
+	usageMap, ok := usage.(map[string]any)
+	if !ok {
+		return
+	}
+	if v, ok := usageMap["input_tokens"]; ok {
+		switch n := v.(type) {
+		case int64:
+			inputTokens = n
+		case float64:
+			inputTokens = int64(n)
+		case int:
+			inputTokens = int64(n)
+		}
+	}
+	if v, ok := usageMap["output_tokens"]; ok {
+		switch n := v.(type) {
+		case int64:
+			outputTokens = n
+		case float64:
+			outputTokens = int64(n)
+		case int:
+			outputTokens = int64(n)
+		}
+	}
+	return
 }

@@ -10,8 +10,8 @@ type Step struct {
 	Input map[string]string `json:"input,omitempty"`
 
 	// Conditional branching
-	Switch string                 `json:"switch,omitempty"`
-	Cases  map[string]SwitchCase  `json:"cases,omitempty"`
+	Switch string                `json:"switch,omitempty"`
+	Cases  map[string]SwitchCase `json:"cases,omitempty"`
 
 	// Parallel execution
 	Parallel []ParallelBranch `json:"parallel,omitempty"`
@@ -21,6 +21,11 @@ type Step struct {
 
 	// Fan-out over array
 	Map *MapConfig `json:"map,omitempty"`
+
+	// OnError: if set and this step fails, run this node instead of aborting.
+	// The error message is available as input.error in the handler node.
+	// The handler's output is written under this step's ID so downstream templates still work.
+	OnError string `json:"on_error,omitempty"`
 }
 
 // SwitchCase is one branch of a switch step
