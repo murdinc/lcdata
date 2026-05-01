@@ -8,8 +8,13 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"os/exec"
 	"strings"
 )
+
+// piperSem limits concurrent piper subprocess invocations.
+var piperSem = make(chan struct{}, 4)
 
 func executeTTS(
 	ctx context.Context,
@@ -29,9 +34,80 @@ func executeTTS(
 		return executeTTSElevenLabs(ctx, node, text, env, events)
 	case "openai":
 		return executeTTSOpenAI(ctx, node, text, env, events)
+	case "piper":
+		return executeTTSPiper(ctx, node, text, env, events)
+	case "macos", "say":
+		return executeTTSMacOS(ctx, node, text, env, events)
 	default:
-		return nil, fmt.Errorf("unknown TTS provider: %s (supported: elevenlabs, openai)", node.Provider)
+		return nil, fmt.Errorf("unknown TTS provider: %s (supported: elevenlabs, openai, piper, macos)", node.Provider)
 	}
+}
+
+func executeTTSMacOS(
+	ctx context.Context,
+	node *Node,
+	text string,
+	env EnvironmentConfig,
+	events chan<- Event,
+) (map[string]any, error) {
+	// voice_id maps to the -v argument (e.g. "Samantha", "Alex", "Karen")
+	// Leave blank to use the system default voice.
+	voice := node.VoiceID
+
+	// say writes AIFF; afconvert turns it into 16-bit 22050Hz WAV
+	aiffFile, err := os.CreateTemp("", "lcdata-say-*.aiff")
+	if err != nil {
+		return nil, fmt.Errorf("macos tts: failed to create temp aiff: %w", err)
+	}
+	aiffFile.Close()
+	defer os.Remove(aiffFile.Name())
+
+	wavFile, err := os.CreateTemp("", "lcdata-say-*.wav")
+	if err != nil {
+		return nil, fmt.Errorf("macos tts: failed to create temp wav: %w", err)
+	}
+	wavFile.Close()
+	defer os.Remove(wavFile.Name())
+
+	// Build say command
+	sayArgs := []string{"-o", aiffFile.Name()}
+	if voice != "" {
+		sayArgs = append(sayArgs, "-v", voice)
+	}
+	sayArgs = append(sayArgs, text)
+
+	sayCmd := exec.CommandContext(ctx, "say", sayArgs...)
+	var sayStderr bytes.Buffer
+	sayCmd.Stderr = &sayStderr
+	if err := sayCmd.Run(); err != nil {
+		return nil, fmt.Errorf("macos tts: say failed: %w\nstderr: %s", err, sayStderr.String())
+	}
+
+	// Convert AIFF → WAV (16-bit little-endian, 22050 Hz)
+	afCmd := exec.CommandContext(ctx, "afconvert",
+		aiffFile.Name(), wavFile.Name(),
+		"-d", "LEI16@22050",
+		"-f", "WAVE",
+	)
+	var afStderr bytes.Buffer
+	afCmd.Stderr = &afStderr
+	if err := afCmd.Run(); err != nil {
+		return nil, fmt.Errorf("macos tts: afconvert failed: %w\nstderr: %s", err, afStderr.String())
+	}
+
+	audioData, err := os.ReadFile(wavFile.Name())
+	if err != nil {
+		return nil, fmt.Errorf("macos tts: failed to read wav output: %w", err)
+	}
+	if len(audioData) == 0 {
+		return nil, fmt.Errorf("macos tts: produced no audio output")
+	}
+
+	return map[string]any{
+		"audio_base64": base64.StdEncoding.EncodeToString(audioData),
+		"content_type": "audio/wav",
+		"size_bytes":   len(audioData),
+	}, nil
 }
 
 func executeTTSElevenLabs(
@@ -152,6 +228,60 @@ func executeTTSOpenAI(
 	return map[string]any{
 		"audio_base64": encoded,
 		"content_type": "audio/mpeg",
+		"size_bytes":   len(audioData),
+	}, nil
+}
+
+func executeTTSPiper(
+	ctx context.Context,
+	node *Node,
+	text string,
+	env EnvironmentConfig,
+	events chan<- Event,
+) (map[string]any, error) {
+	bin := env.PiperBin
+	if bin == "" {
+		bin = "piper"
+	}
+
+	voiceModel := node.VoiceID
+	if voiceModel == "" {
+		return nil, fmt.Errorf("piper requires a voice model path in voice_id (e.g. /path/to/en_US-lessac-medium.onnx)")
+	}
+
+	// Piper writes WAV to an output file; use a temp file
+	tmpOut, err := os.CreateTemp("", "lcdata-piper-*.wav")
+	if err != nil {
+		return nil, fmt.Errorf("failed to create temp output file: %w", err)
+	}
+	tmpOut.Close()
+	defer os.Remove(tmpOut.Name())
+
+	cmd := exec.CommandContext(ctx, bin, "--model", voiceModel, "--output_file", tmpOut.Name())
+	cmd.Stdin = strings.NewReader(text)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+
+	piperSem <- struct{}{}
+	defer func() { <-piperSem }()
+
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("piper failed: %w\nstderr: %s", err, stderr.String())
+	}
+
+	audioData, err := os.ReadFile(tmpOut.Name())
+	if err != nil {
+		return nil, fmt.Errorf("failed to read piper output: %w", err)
+	}
+	if len(audioData) == 0 {
+		return nil, fmt.Errorf("piper produced no audio output")
+	}
+
+	encoded := base64.StdEncoding.EncodeToString(audioData)
+
+	return map[string]any{
+		"audio_base64": encoded,
+		"content_type": "audio/wav",
 		"size_bytes":   len(audioData),
 	}, nil
 }

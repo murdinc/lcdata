@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"text/template"
+	"time"
 )
 
 // RunContext is the shared data envelope for a single run.
@@ -105,6 +106,12 @@ func (rc *RunContext) Render(tmplStr string) (string, error) {
 		"fromJSON": fromJSON,
 		"default":  defaultVal,
 		"join":     strings.Join,
+		"now":      func() string { return time.Now().Format(time.RFC3339) },
+		"date":     func() string { return time.Now().Format("2006-01-02") },
+		"datetime": func() string { return time.Now().Format("2006-01-02 15:04:05") },
+		"unix":     func() string { return fmt.Sprintf("%d", time.Now().UnixNano()) },
+		"gt":       func(a, b float64) bool { return a > b },
+		"lt":       func(a, b float64) bool { return a < b },
 	}
 
 	t, err := template.New("").Funcs(funcMap).Parse(tmplStr)
@@ -248,6 +255,32 @@ func lookupPath(m map[string]any, parts []string) any {
 		return lookupPath(nested, parts[1:])
 	}
 	return nil
+}
+
+// RenderSystemPrompt renders template expressions in a system prompt string.
+// inputs is available as dot (.) in the template, so {{.available_nodes}} etc. work.
+// Fails silently: returns the original string on any error.
+func RenderSystemPrompt(text string, inputs map[string]any) string {
+	if !strings.Contains(text, "{{") {
+		return text
+	}
+	funcMap := template.FuncMap{
+		"now":      func() string { return time.Now().Format(time.RFC3339) },
+		"date":     func() string { return time.Now().Format("2006-01-02") },
+		"datetime": func() string { return time.Now().Format("2006-01-02 15:04:05") },
+		"unix":     func() string { return fmt.Sprintf("%d", time.Now().UnixNano()) },
+		"toJSON":   toJSON,
+		"default":  defaultVal,
+	}
+	t, err := template.New("").Funcs(funcMap).Parse(text)
+	if err != nil {
+		return text
+	}
+	var buf bytes.Buffer
+	if err := t.Execute(&buf, inputs); err != nil {
+		return text
+	}
+	return buf.String()
 }
 
 // --- template helper functions ---

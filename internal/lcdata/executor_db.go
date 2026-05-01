@@ -5,8 +5,8 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
-	"time"
 
+	_ "github.com/go-sql-driver/mysql"
 	_ "github.com/lib/pq"
 	_ "modernc.org/sqlite"
 )
@@ -28,12 +28,13 @@ func executeDatabase(
 	if driver == "" {
 		driver = "postgres"
 	}
-	// Map friendly names to sql driver names
 	switch driver {
 	case "postgres", "postgresql":
 		driver = "postgres"
 	case "sqlite", "sqlite3":
 		driver = "sqlite"
+	case "mysql", "mariadb":
+		driver = "mysql"
 	}
 
 	db, err := sql.Open(driver, connStr)
@@ -42,10 +43,125 @@ func executeDatabase(
 	}
 	defer db.Close()
 
-	// Build params — render each against inputs
-	params := make([]any, len(node.Params))
-	for i, p := range node.Params {
-		// Resolve simple input references like "{{.input.user_id}}"
+	switch strings.ToLower(node.Operation) {
+	case "exec":
+		return dbExec(ctx, db, node, inputs)
+	case "lookup":
+		return dbLookup(ctx, db, node, inputs, driver, events)
+	default:
+		return dbQuery(ctx, db, node, inputs, events)
+	}
+}
+
+// dbQuery runs a SELECT and returns all rows.
+// Params are resolved from inputs: "{{.input.foo}}" → inputs["foo"].
+func dbQuery(
+	ctx context.Context,
+	db *sql.DB,
+	node *Node,
+	inputs map[string]any,
+	events chan<- Event,
+) (map[string]any, error) {
+	params := resolveParams(node.Params, inputs)
+
+	rows, err := db.QueryContext(ctx, node.Query, params...)
+	if err != nil {
+		return nil, fmt.Errorf("query error: %w", err)
+	}
+	defer rows.Close()
+
+	return scanRows(rows)
+}
+
+// dbExec runs an INSERT/UPDATE/DELETE and returns rows_affected.
+func dbExec(
+	ctx context.Context,
+	db *sql.DB,
+	node *Node,
+	inputs map[string]any,
+) (map[string]any, error) {
+	params := resolveParams(node.Params, inputs)
+
+	result, err := db.ExecContext(ctx, node.Query, params...)
+	if err != nil {
+		return nil, fmt.Errorf("exec error: %w", err)
+	}
+	rowsAffected, _ := result.RowsAffected()
+	return map[string]any{
+		"rows_affected": rowsAffected,
+		"ok":            true,
+	}, nil
+}
+
+// dbLookup performs a SELECT … WHERE id IN (…) against an array of IDs from inputs["ids"].
+// The query should use a placeholder: SELECT * FROM t WHERE id IN (?)
+// dbLookup replaces the single ? with the correct number of driver-specific placeholders.
+func dbLookup(
+	ctx context.Context,
+	db *sql.DB,
+	node *Node,
+	inputs map[string]any,
+	driver string,
+	events chan<- Event,
+) (map[string]any, error) {
+	// ids must be []any (array of id strings from search results)
+	rawIDs, ok := inputs["ids"]
+	if !ok || rawIDs == nil {
+		return map[string]any{"rows": []any{}, "count": 0}, nil
+	}
+
+	var ids []any
+	switch v := rawIDs.(type) {
+	case []any:
+		// Accept either []string or [{id: "...", score: ...}] (springg search results)
+		for _, item := range v {
+			switch id := item.(type) {
+			case string:
+				ids = append(ids, id)
+			case map[string]any:
+				if idStr, ok := id["id"].(string); ok {
+					ids = append(ids, idStr)
+				}
+			}
+		}
+	case []string:
+		ids = make([]any, len(v))
+		for i, s := range v {
+			ids[i] = s
+		}
+	default:
+		return nil, fmt.Errorf("input.ids must be an array, got %T", rawIDs)
+	}
+
+	if len(ids) == 0 {
+		return map[string]any{"rows": []any{}, "count": 0}, nil
+	}
+
+	// Build IN clause placeholders
+	placeholders := make([]string, len(ids))
+	for i := range ids {
+		switch driver {
+		case "postgres":
+			placeholders[i] = fmt.Sprintf("$%d", i+1)
+		default:
+			placeholders[i] = "?"
+		}
+	}
+	query := strings.Replace(node.Query, "?", strings.Join(placeholders, ","), 1)
+
+	rows, err := db.QueryContext(ctx, query, ids...)
+	if err != nil {
+		return nil, fmt.Errorf("lookup query error: %w", err)
+	}
+	defer rows.Close()
+
+	return scanRows(rows)
+}
+
+// resolveParams converts node.Params — which may contain "{{.input.key}}" references — to []any.
+func resolveParams(paramTemplates []string, inputs map[string]any) []any {
+	params := make([]any, len(paramTemplates))
+	for i, p := range paramTemplates {
 		if strings.HasPrefix(p, "{{") {
 			key := strings.TrimPrefix(p, "{{.input.")
 			key = strings.TrimSuffix(key, "}}")
@@ -57,13 +173,11 @@ func executeDatabase(
 		}
 		params[i] = p
 	}
+	return params
+}
 
-	rows, err := db.QueryContext(ctx, node.Query, params...)
-	if err != nil {
-		return nil, fmt.Errorf("query error: %w", err)
-	}
-	defer rows.Close()
-
+// scanRows reads all rows from a sql.Rows into []any of map[string]any.
+func scanRows(rows *sql.Rows) (map[string]any, error) {
 	cols, err := rows.Columns()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get columns: %w", err)
@@ -83,20 +197,12 @@ func executeDatabase(
 		row := make(map[string]any, len(cols))
 		for i, col := range cols {
 			v := vals[i]
-			// Convert []byte to string for readability
 			if b, ok := v.([]byte); ok {
 				v = string(b)
 			}
 			row[col] = v
 		}
 		results = append(results, row)
-
-		events <- Event{
-			Event:     EventChunk,
-			StepID:    node.Name,
-			Data:      fmt.Sprintf("%v", row),
-			Timestamp: time.Now(),
-		}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("rows error: %w", err)
@@ -105,7 +211,6 @@ func executeDatabase(
 	if results == nil {
 		results = []any{}
 	}
-
 	return map[string]any{
 		"rows":  results,
 		"count": len(results),

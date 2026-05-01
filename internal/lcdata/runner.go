@@ -75,6 +75,7 @@ func (r *Runner) Start(ctx context.Context, req RunRequest, nodeName string) (*R
 	if err != nil {
 		return nil, fmt.Errorf("environment %q: %w", envName, err)
 	}
+	env.NodesPath = r.cfg.NodesPath
 
 	// Validate inputs against the node's declared schema
 	if err := validateInputs(node, req.Input); err != nil {

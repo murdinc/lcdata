@@ -1,0 +1,18 @@
+{
+  "name": "scaffold_read",
+  "description": "Returns the full JSON config for a named lcdata node.",
+  "type": "scaffold",
+  "operation": "read",
+  "input": {
+    "name": {
+      "type": "string",
+      "required": true
+    }
+  },
+  "output": {
+    "name":   { "type": "string" },
+    "path":   { "type": "string" },
+    "config": { "type": "string" },
+    "object": { "type": "object" }
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "name": "scaffold_run",
+  "description": "Runs a named node with given inputs and returns the output. Used by builder_llm to test a newly created node immediately after scaffold_create.",
+  "type": "scaffold",
+  "operation": "run",
+  "input": {
+    "name":  { "type": "string", "required": true,  "description": "Node name to run" },
+    "input": { "type": "object", "required": false, "description": "Input key/value pairs for the node" }
+  },
+  "output": {
+    "error": { "type": "string" },
+    "ok":    { "type": "boolean" }
+  }
+}

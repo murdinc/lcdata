@@ -4,11 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -112,7 +115,7 @@ func newServer(cfg *lcdata.Config, runner *lcdata.Runner, logger *slog.Logger) h
 	r.Use(middleware.Recoverer)
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   []string{"*"},
-		AllowedMethods:   []string{"GET", "POST", "OPTIONS"},
+		AllowedMethods:   []string{"GET", "POST", "OPTIONS", "PUT"},
 		AllowedHeaders:   []string{"Authorization", "Content-Type"},
 		AllowCredentials: false,
 	}))
@@ -133,6 +136,8 @@ func newServer(cfg *lcdata.Config, runner *lcdata.Runner, logger *slog.Logger) h
 	// Execution
 	r.Post("/api/nodes/{name}/run", handleRun(cfg, runner))
 	r.Post("/api/nodes/{name}/stream", handleStream(cfg, runner))
+	r.Post("/api/nodes/{name}/audio", handleAudioRun(cfg, runner))
+	r.Post("/api/nodes/{name}/audio/stream", handleAudioStream(cfg, runner))
 	r.Get("/ws/nodes/{name}", handleWebSocket(cfg, runner, logger))
 
 	// Run management
@@ -366,6 +371,175 @@ func handleRun(cfg *lcdata.Config, runner *lcdata.Runner) http.HandlerFunc {
 	}
 }
 
+// handleAudioRun accepts a multipart/form-data upload with an "audio" file field,
+// saves it to a temp file, and runs the named node with audio_url set to the local path.
+// This lets clients POST raw audio directly rather than hosting it over HTTP.
+func handleAudioRun(cfg *lcdata.Config, runner *lcdata.Runner) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		name := chi.URLParam(r, "name")
+		if !nodeAllowed(r, name) {
+			writeError(w, http.StatusForbidden, "token does not permit access to node: "+name)
+			return
+		}
+
+		if err := r.ParseMultipartForm(50 << 20); err != nil { // 50 MB max
+			writeError(w, http.StatusBadRequest, "failed to parse multipart form: "+err.Error())
+			return
+		}
+
+		file, header, err := r.FormFile("audio")
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "audio field is required")
+			return
+		}
+		defer file.Close()
+
+		// Determine extension from content-type or original filename
+		ext := filepath.Ext(header.Filename)
+		if ext == "" {
+			ct := header.Header.Get("Content-Type")
+			ext = audioExtFromMIME(ct)
+		}
+
+		tmpFile, err := os.CreateTemp("", "lcdata-audio-*"+ext)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to create temp file: "+err.Error())
+			return
+		}
+		defer os.Remove(tmpFile.Name())
+
+		if _, err := io.Copy(tmpFile, file); err != nil {
+			tmpFile.Close()
+			writeError(w, http.StatusInternalServerError, "failed to write audio: "+err.Error())
+			return
+		}
+		tmpFile.Close()
+
+		envName := r.FormValue("env")
+		if envName == "" {
+			envName = "default"
+		}
+
+		runInput := map[string]any{
+			"audio_url": tmpFile.Name(),
+		}
+		if histJSON := r.FormValue("history"); histJSON != "" {
+			var history []any
+			if err := json.Unmarshal([]byte(histJSON), &history); err == nil && len(history) > 0 {
+				runInput["history"] = history
+			}
+		}
+
+		req := lcdata.RunRequest{
+			Input: runInput,
+			Env:   envName,
+		}
+
+		ctx, cancel := context.WithTimeout(r.Context(), cfg.RunTimeoutDuration)
+		defer cancel()
+
+		run, err := runner.RunSync(ctx, req, name)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+
+		status := http.StatusOK
+		if run.Status == lcdata.RunStatusFailed {
+			status = http.StatusInternalServerError
+		}
+		writeJSON(w, status, run)
+	}
+}
+
+// handleAudioStream is like handleAudioRun but streams events as NDJSON
+// (one JSON object per line) instead of waiting for the run to finish.
+// Clients can read line-by-line and display step progress in real time.
+func handleAudioStream(cfg *lcdata.Config, runner *lcdata.Runner) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		name := chi.URLParam(r, "name")
+		if !nodeAllowed(r, name) {
+			writeError(w, http.StatusForbidden, "token does not permit access to node: "+name)
+			return
+		}
+
+		if err := r.ParseMultipartForm(50 << 20); err != nil {
+			writeError(w, http.StatusBadRequest, "failed to parse multipart form: "+err.Error())
+			return
+		}
+
+		file, header, err := r.FormFile("audio")
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "audio field is required")
+			return
+		}
+		defer file.Close()
+
+		ext := filepath.Ext(header.Filename)
+		if ext == "" {
+			ct := header.Header.Get("Content-Type")
+			ext = audioExtFromMIME(ct)
+		}
+
+		tmpFile, err := os.CreateTemp("", "lcdata-audio-*"+ext)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to create temp file: "+err.Error())
+			return
+		}
+		defer os.Remove(tmpFile.Name())
+
+		if _, err := io.Copy(tmpFile, file); err != nil {
+			tmpFile.Close()
+			writeError(w, http.StatusInternalServerError, "failed to write audio: "+err.Error())
+			return
+		}
+		tmpFile.Close()
+
+		envName := r.FormValue("env")
+		if envName == "" {
+			envName = "default"
+		}
+
+		runInput := map[string]any{
+			"audio_url": tmpFile.Name(),
+		}
+		if histJSON := r.FormValue("history"); histJSON != "" {
+			var history []any
+			if err := json.Unmarshal([]byte(histJSON), &history); err == nil && len(history) > 0 {
+				runInput["history"] = history
+			}
+		}
+
+		req := lcdata.RunRequest{
+			Input: runInput,
+			Env:   envName,
+		}
+
+		run, err := runner.Start(r.Context(), req, name)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("X-Accel-Buffering", "no")
+
+		flusher, canFlush := w.(http.Flusher)
+
+		for event := range run.Events {
+			line := append(event.JSON(), '\n')
+			if _, werr := w.Write(line); werr != nil {
+				runner.CancelRun(run.ID)
+				return
+			}
+			if canFlush {
+				flusher.Flush()
+			}
+		}
+	}
+}
+
 func handleStream(cfg *lcdata.Config, runner *lcdata.Runner) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		name := chi.URLParam(r, "name")
@@ -489,4 +663,24 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 
 func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]any{"error": msg})
+}
+
+func audioExtFromMIME(ct string) string {
+	ct = strings.ToLower(ct)
+	switch {
+	case strings.Contains(ct, "audio/wav"), strings.Contains(ct, "audio/wave"):
+		return ".wav"
+	case strings.Contains(ct, "audio/mpeg"), strings.Contains(ct, "audio/mp3"):
+		return ".mp3"
+	case strings.Contains(ct, "audio/ogg"):
+		return ".ogg"
+	case strings.Contains(ct, "audio/flac"):
+		return ".flac"
+	case strings.Contains(ct, "audio/mp4"), strings.Contains(ct, "audio/m4a"):
+		return ".m4a"
+	case strings.Contains(ct, "audio/webm"):
+		return ".webm"
+	default:
+		return ".wav"
+	}
 }

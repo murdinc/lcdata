@@ -1,0 +1,18 @@
+{
+  "name": "voice_tts",
+  "description": "Converts text to speech. Default: OpenAI TTS (needs OPENAI_API_KEY, returns MP3). Switch provider to 'piper' for fully local use — set voice_id to path of your .onnx model file. Switch to 'elevenlabs' for higher quality (needs ELEVENLABS_API_KEY).",
+  "type": "tts",
+  "provider": "macos",
+  "voice_id": "Samantha",
+  "input": {
+    "text": {
+      "type": "string",
+      "required": true
+    }
+  },
+  "output": {
+    "audio_base64":  { "type": "string" },
+    "content_type":  { "type": "string" },
+    "size_bytes":    { "type": "number" }
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "name": "create_memory_index",
+  "description": "One-time setup: creates the lcdata vector index in springg with 768 dimensions (nomic-embed-text). Run once before using voice_assistant_memory.",
+  "type": "vector",
+  "operation": "create_index",
+  "index": "lcdata",
+  "dimensions": 768,
+  "input": {},
+  "output": {
+    "ok": { "type": "boolean" }
+  }
+}

@@ -1,8 +1,8 @@
 {
   "name": "web_search",
-  "description": "Searches the web using Brave Search API and returns top results with title, URL, and description",
+  "description": "Searches the web using SearXNG (self-hosted, no API key required) and returns top results with title, URL, and description",
   "type": "search",
-  "search_provider": "brave",
+  "search_provider": "searxng",
   "search_count": 10,
   "input": {
     "query": { "type": "string", "required": true }

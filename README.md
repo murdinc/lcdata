@@ -56,8 +56,11 @@ The `type` field determines how it runs. Nodes can be wired together into pipeli
 | `command` | Shell command with streaming stdout |
 | `transform` | Template-based data reshaping, no external call |
 | `database` | SQL query — Postgres or SQLite |
-| `stt` | Speech-to-text — Deepgram or OpenAI Whisper |
-| `tts` | Text-to-speech — ElevenLabs or OpenAI |
+| `stt` | Speech-to-text — Deepgram, OpenAI Whisper, or whisper.cpp (local) |
+| `tts` | Text-to-speech — ElevenLabs, OpenAI, or Piper (local) |
+| `vector` | Vector store operations via springg — upsert, search, get, delete |
+| `embedding` | Generate embedding vectors — OpenAI or Ollama |
+| `scaffold` | Node self-builder — create, read, list, or delete node configs at runtime |
 | `pipeline` | Orchestrates other nodes — sequential, switch, parallel, loop, map |
 
 ---
@@ -96,11 +99,20 @@ The `type` field determines how it runs. Nodes can be wired together into pipeli
 ```
 
 - **providers:** `anthropic`, `ollama`, `openai`
-- **`stream: true`** emits `chunk` events over WebSocket/SSE as tokens arrive
+- **`stream: true`** emits `chunk` events over WebSocket/SSE as tokens arrive — works with and without tools
 - **`structured_output`** — when set, the LLM response is parsed as JSON and each field is merged into the output map alongside `response`
 - **`history`** input — pass an array of `{role, content}` objects for multi-turn conversations
-- **`tools`** — list of node names the LLM can invoke as tools (Anthropic only). The engine runs an agentic loop (up to 10 turns) calling nodes and feeding results back until the model returns a final answer
+- **`max_history`** — trim `history` to the most recent N entries before sending to the model (prevents context overflow)
+- **`tools`** — list of node names the LLM can invoke as tools. Anthropic and Ollama run an agentic loop (up to 10 turns). Streaming is fully supported with tools — text tokens stream as they arrive; tool calls execute between turns.
 - **`retry_count` / `retry_delay`** — retry on API error with exponential backoff + jitter (e.g. `"retry_count": 3, "retry_delay": "1s"`)
+
+**Date/time template functions** — available in system prompts and all templates:
+
+| Function | Returns |
+|---|---|
+| `{{now}}` | Current time as RFC3339 string |
+| `{{date}}` | Current date as `YYYY-MM-DD` |
+| `{{datetime}}` | Current date+time as `YYYY-MM-DD HH:MM:SS` |
 
 ### HTTP Node
 
@@ -246,7 +258,7 @@ The `type` field determines how it runs. Nodes can be wired together into pipeli
   "model": "nova-2",
   "language": "en",
   "input": {
-    "url": { "type": "string", "required": true }
+    "audio_url": { "type": "string", "required": true }
   },
   "output": {
     "transcript": { "type": "string" },
@@ -258,8 +270,34 @@ The `type` field determines how it runs. Nodes can be wired together into pipeli
 }
 ```
 
-- **providers:** `deepgram` (pre-recorded REST API), `openai` / `whisper` (multipart upload)
-- Deepgram accepts an audio URL in `input.url`; OpenAI/Whisper accepts a URL that is fetched then uploaded
+- **providers:** `deepgram` (pre-recorded REST API), `openai` / `whisper` (multipart upload), `whisper-cpp` (local)
+- Deepgram accepts an audio URL in `input.audio_url`; OpenAI/Whisper fetches the URL then uploads it
+- `whisper-cpp` runs locally via the `whisper-cli` binary — no API key required
+
+**Local STT with whisper.cpp:**
+
+```json
+{
+  "name": "transcribe_local",
+  "type": "stt",
+  "provider": "whisper-cpp",
+  "model": "/path/to/ggml-base.en.bin",
+  "language": "en",
+  "input": {
+    "audio_url": { "type": "string", "required": true }
+  },
+  "output": {
+    "transcript": { "type": "string" },
+    "confidence": { "type": "number" },
+    "words":      { "type": "array" },
+    "language":   { "type": "string" }
+  }
+}
+```
+
+- `model` — path to a whisper.cpp GGML model file (e.g. `ggml-base.en.bin`, `ggml-large-v3.bin`). Falls back to `whisperCppModel` in env config.
+- Binary defaults to `whisper-cli` on `$PATH`. Override with `whisperCppBin` in env config or `WHISPER_CPP_BIN` env var.
+- Models: download from [ggerganov/whisper.cpp](https://github.com/ggerganov/whisper.cpp) or via `bash models/download-ggml-model.sh base.en`
 
 ### TTS Node
 
@@ -281,8 +319,211 @@ The `type` field determines how it runs. Nodes can be wired together into pipeli
 }
 ```
 
-- **providers:** `elevenlabs`, `openai`
-- Returns audio as a base64-encoded string with MIME type `audio/mpeg`
+- **providers:** `elevenlabs`, `openai`, `piper`
+- Returns audio as a base64-encoded string. `content_type` is `audio/mpeg` for cloud providers, `audio/wav` for Piper.
+
+**Local TTS with Piper:**
+
+```json
+{
+  "name": "speak_local",
+  "type": "tts",
+  "provider": "piper",
+  "voice_id": "/path/to/en_US-lessac-medium.onnx",
+  "input": {
+    "text": { "type": "string", "required": true }
+  },
+  "output": {
+    "audio_base64": { "type": "string" },
+    "content_type":  { "type": "string" },
+    "size_bytes":    { "type": "number" }
+  }
+}
+```
+
+- `voice_id` — path to a Piper `.onnx` voice model file (required). No API key needed.
+- Binary defaults to `piper` on `$PATH`. Override with `piperBin` in env config or `PIPER_BIN` env var.
+- Voice models: download from [rhasspy/piper](https://github.com/rhasspy/piper) releases
+
+### Vector Node
+
+Backed by [springg](https://github.com/murdinc/springg) — a local vector store with cosine similarity search, WAL persistence, and optional S3 backup.
+
+**Operations:** `upsert`, `search`, `get`, `delete`, `create_index`, `delete_index`
+
+**upsert** — add or update a vector:
+
+```json
+{
+  "name": "memory_store",
+  "type": "vector",
+  "operation": "upsert",
+  "index": "assistant_memory",
+  "input": {
+    "id":       { "type": "string", "required": true },
+    "vector":   { "type": "array",  "required": true },
+    "metadata": { "type": "object", "required": false }
+  },
+  "output": {
+    "id":    { "type": "string" },
+    "added": { "type": "boolean" }
+  }
+}
+```
+
+**search** — find top-k similar vectors by cosine similarity:
+
+```json
+{
+  "name": "memory_search",
+  "type": "vector",
+  "operation": "search",
+  "index": "assistant_memory",
+  "top_k": 5,
+  "input": {
+    "vector": { "type": "array",  "required": true },
+    "k":      { "type": "number", "required": false }
+  },
+  "output": {
+    "results": { "type": "array" },
+    "count":   { "type": "number" }
+  }
+}
+```
+
+Each result in `results` is `{id, score, metadata}` where `score` is cosine similarity (0–1).
+
+**get** — fetch a stored vector by ID:
+
+```json
+{
+  "name": "memory_get",
+  "type": "vector",
+  "operation": "get",
+  "index": "assistant_memory",
+  "input": {
+    "id": { "type": "string", "required": true }
+  },
+  "output": {
+    "id":       { "type": "string" },
+    "vector":   { "type": "array" },
+    "metadata": { "type": "object" }
+  }
+}
+```
+
+**delete** — remove a vector by ID:
+
+```json
+{
+  "name": "memory_delete",
+  "type": "vector",
+  "operation": "delete",
+  "index": "assistant_memory",
+  "input": {
+    "id": { "type": "string", "required": true }
+  }
+}
+```
+
+**create_index** / **delete_index** — manage indexes (typically run once at setup):
+
+```json
+{
+  "name": "memory_init",
+  "type": "vector",
+  "operation": "create_index",
+  "index": "assistant_memory",
+  "dimensions": 1536
+}
+```
+
+- `index` — name of the springg index (required on all operations)
+- `dimensions` — vector size; must match your embedding model (required for `create_index`)
+- `top_k` — default number of results for `search` (default: 10); overridable per-call via `input.k`
+- Vectors are stored as 32-bit floats; pass any JSON number array as `input.vector`
+
+### Embedding Node
+
+Generates embedding vectors from text. Pair with the `vector` node to build RAG pipelines.
+
+```json
+{
+  "name": "embed_text",
+  "type": "embedding",
+  "provider": "openai",
+  "model": "text-embedding-3-small",
+  "input": {
+    "text": { "type": "string", "required": true }
+  },
+  "output": {
+    "vector":     { "type": "array" },
+    "dimensions": { "type": "number" },
+    "model":      { "type": "string" }
+  }
+}
+```
+
+- **providers:** `openai` (default model: `text-embedding-3-small`), `ollama` (model required, e.g. `nomic-embed-text`)
+- Output `vector` can be passed directly to a `vector` node's `upsert` or `search` input
+
+---
+
+### Scaffold Node
+
+The `scaffold` type lets lcdata **create new nodes at runtime** — it can build itself. Combined with an LLM node and the built-in `design_node` pipeline, you can describe a new capability in plain English and have it live in the engine within seconds.
+
+Operations: `list`, `read`, `create`, `delete`.
+
+```json
+{
+  "name": "scaffold_list",
+  "type": "scaffold",
+  "operation": "list"
+}
+```
+
+```json
+{
+  "name": "scaffold_create",
+  "type": "scaffold",
+  "operation": "create",
+  "input": {
+    "name":          { "type": "string", "required": true },
+    "config":        { "type": "string", "required": true },
+    "system_prompt": { "type": "string" }
+  }
+}
+```
+
+**`list`** — returns `{nodes: [...summaries], count}`. No inputs required.
+
+**`read`** — input: `name`. Returns `{name, path, config (string), object (parsed)}`.
+
+**`create`** — inputs: `name`, `config` (JSON string or object — validated before writing), optional `system_prompt` (written as `system.md`). Returns `{name, path, created: true}`. The hot-reload watcher picks up the new node within 200ms automatically.
+
+**`delete`** — input: `name`. Removes the node directory. Hot-reload deregisters it.
+
+#### Self-building: `design_node` pipeline
+
+The built-in `design_node` pipeline takes a natural language description and creates a working node:
+
+```bash
+curl -X POST http://localhost:8080/api/nodes/design_node/run \
+  -H "Content-Type: application/json" \
+  -d '{
+    "input": {
+      "name": "sentiment_score",
+      "description": "Classify the sentiment of a text as positive, negative, or neutral with a confidence score"
+    }
+  }'
+```
+
+Internally it chains: `scaffold_list` → `scaffold_designer_llm` (Claude with full schema reference) → `scaffold_create`. The new node is live as soon as the response returns.
+
+The `scaffold_designer_llm` node uses a comprehensive system prompt (`nodes/scaffold_designer_llm/system.md`) covering every node type, field, template syntax, naming conventions, and design guidelines so the LLM generates configs that pass validation on the first attempt.
+
+**Provider note:** `design_node` defaults to `anthropic` / `claude-opus-4-5` for the designer LLM. You can edit `nodes/scaffold_designer_llm/scaffold_designer_llm.json` to switch to any other provider/model.
 
 ---
 
@@ -508,7 +749,14 @@ GET /api/info            → server version and capabilities
 POST /api/nodes/{name}/run     → synchronous, waits for full result
 POST /api/nodes/{name}/stream  → Server-Sent Events, streams as it runs
 GET  /ws/nodes/{name}          → WebSocket, bidirectional streaming
+POST /api/nodes/{name}/audio   → multipart upload: POST audio file, runs node with audio_url set
 ```
+
+**Audio upload** — `multipart/form-data` with fields:
+- `audio` (required) — audio file (WAV, MP3, OGG, FLAC, M4A, WebM)
+- `env` (optional) — environment name (default: `"default"`)
+
+The file is saved to a temp path and passed as `input.audio_url` to the node. Works with any `stt` node; `whisper-cpp` reads it directly without an HTTP round-trip.
 
 **Request body:**
 ```json
@@ -605,6 +853,11 @@ Lookup order: `~/lcdataenv.json` → `./nodes/env.json`. All fields also fall ba
       "searxngEndpoint": "http://localhost:8888",
       "elevenlabsKey":   "",
       "deepgramKey":     "",
+      "whisperCppBin":   "/usr/local/bin/whisper-cli",
+      "whisperCppModel": "/path/to/ggml-base.en.bin",
+      "piperBin":        "/usr/local/bin/piper",
+      "springgEndpoint": "http://localhost:8181",
+      "springgKey":      "",
       "dbConnections": {
         "main": "postgres://user:pass@localhost:5432/mydb"
       }
@@ -630,6 +883,11 @@ Lookup order: `~/lcdataenv.json` → `./nodes/env.json`. All fields also fall ba
 | `searxngEndpoint` | `SEARXNG_ENDPOINT` |
 | `elevenlabsKey` | `ELEVENLABS_API_KEY` |
 | `deepgramKey` | `DEEPGRAM_API_KEY` |
+| `whisperCppBin` | `WHISPER_CPP_BIN` |
+| `whisperCppModel` | `WHISPER_CPP_MODEL` |
+| `piperBin` | `PIPER_BIN` |
+| `springgEndpoint` | `SPRINGG_ENDPOINT` |
+| `springgKey` | `SPRINGG_KEY` |
 
 ---
 
@@ -768,8 +1026,10 @@ lcdata/
     executor_cmd.go   Command execution with streaming stdout
     executor_xfm.go   Transform (Go template rendering)
     executor_db.go    Database — SQLite + Postgres via database/sql
-    executor_stt.go   STT — Deepgram pre-recorded + OpenAI Whisper
-    executor_tts.go   TTS — ElevenLabs + OpenAI (returns base64 audio)
+    executor_stt.go   STT — Deepgram, OpenAI Whisper, whisper.cpp (local+file path)
+    executor_tts.go   TTS — ElevenLabs, OpenAI, Piper (local, returns base64 audio)
+    executor_vector.go Vector store — springg (upsert, search, get, delete, create/delete index)
+    executor_embed.go  Embeddings — OpenAI, Ollama (returns float64 vector)
   nodes/
     llm_chat/
     classify_intent/

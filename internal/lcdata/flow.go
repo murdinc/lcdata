@@ -155,6 +155,16 @@ func executeSimpleStep(
 			result.Status = RunStatusCompleted
 			result.Output = handlerOutput
 			result.Error = execErr.Error() // preserve original error for transparency
+			// Emit a step_completed event that carries the error so streaming clients can warn the user
+			events <- Event{
+				Event:      EventStepCompleted,
+				RunID:      runID,
+				StepID:     step.ID,
+				Node:       node.Name,
+				Error:      execErr.Error(),
+				DurationMS: dur,
+				Timestamp:  ended,
+			}
 			return allResults, nil
 		}
 

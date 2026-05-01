@@ -7,8 +7,13 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"os/exec"
 	"strings"
 )
+
+// whisperSem limits concurrent whisper-cpp subprocess invocations (CPU-bound).
+var whisperSem = make(chan struct{}, 2)
 
 func executeSTT(
 	ctx context.Context,
@@ -28,8 +33,10 @@ func executeSTT(
 		return executeSTTDeepgram(ctx, node, audioURL, env, events)
 	case "whisper", "openai-whisper":
 		return executeSTTWhisper(ctx, node, audioURL, env, events)
+	case "whisper-cpp", "whispercpp":
+		return executeSTTWhisperCpp(ctx, node, audioURL, env, events)
 	default:
-		return nil, fmt.Errorf("unknown STT provider: %s (supported: deepgram, whisper)", node.Provider)
+		return nil, fmt.Errorf("unknown STT provider: %s (supported: deepgram, whisper, whisper-cpp)", node.Provider)
 	}
 }
 
@@ -198,4 +205,119 @@ func executeSTTWhisper(
 		"confidence": 1.0,
 		"words":      []any{},
 	}, nil
+}
+
+func executeSTTWhisperCpp(
+	ctx context.Context,
+	node *Node,
+	audioURL string,
+	env EnvironmentConfig,
+	events chan<- Event,
+) (map[string]any, error) {
+	bin := env.WhisperCppBin
+	if bin == "" {
+		bin = "whisper-cli"
+	}
+
+	model := node.Model
+	if model == "" {
+		model = env.WhisperCppModel
+	}
+	if model == "" {
+		return nil, fmt.Errorf("whisper-cpp requires a model path: set node.model or whisperCppModel in env config")
+	}
+
+	// Resolve audio to a local file path — skip download if already local
+	var audioFilePath string
+	if strings.HasPrefix(audioURL, "/") || strings.HasPrefix(audioURL, "file://") {
+		audioFilePath = strings.TrimPrefix(audioURL, "file://")
+	} else {
+		audioReq, err := http.NewRequestWithContext(ctx, "GET", audioURL, nil)
+		if err != nil {
+			return nil, fmt.Errorf("failed to build audio download request: %w", err)
+		}
+		audioResp, err := http.DefaultClient.Do(audioReq)
+		if err != nil {
+			return nil, fmt.Errorf("failed to download audio: %w", err)
+		}
+		defer audioResp.Body.Close()
+		audioData, err := io.ReadAll(audioResp.Body)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read audio data: %w", err)
+		}
+
+		ext := audioExtFromContentType(audioResp.Header.Get("Content-Type"))
+		tmpAudio, err := os.CreateTemp("", "lcdata-whisper-*"+ext)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create temp audio file: %w", err)
+		}
+		defer os.Remove(tmpAudio.Name())
+		if _, err := tmpAudio.Write(audioData); err != nil {
+			tmpAudio.Close()
+			return nil, fmt.Errorf("failed to write temp audio file: %w", err)
+		}
+		tmpAudio.Close()
+		audioFilePath = tmpAudio.Name()
+	}
+
+	// whisper-cli -otxt writes transcript to <audio_file>.txt
+	txtPath := audioFilePath + ".txt"
+	defer os.Remove(txtPath)
+
+	lang := node.Language
+	if lang == "" {
+		lang = "en"
+	}
+
+	cmd := exec.CommandContext(ctx, bin,
+		"-m", model,
+		"-f", audioFilePath,
+		"-l", lang,
+		"-nt",   // no timestamps
+		"-otxt", // write transcript to .txt file
+	)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+
+	whisperSem <- struct{}{}
+	defer func() { <-whisperSem }()
+
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("whisper-cpp failed: %w\nstderr: %s", err, stderr.String())
+	}
+
+	txtData, err := os.ReadFile(txtPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read whisper-cpp transcript output: %w", err)
+	}
+
+	transcript := strings.TrimSpace(string(txtData))
+
+	return map[string]any{
+		"transcript": transcript,
+		"confidence": 1.0,
+		"words":      []any{},
+		"language":   lang,
+	}, nil
+}
+
+// audioExtFromContentType returns a file extension for a given audio Content-Type.
+func audioExtFromContentType(ct string) string {
+	ct = strings.ToLower(ct)
+	switch {
+	case strings.Contains(ct, "audio/wav"), strings.Contains(ct, "audio/wave"), strings.Contains(ct, "audio/x-wav"):
+		return ".wav"
+	case strings.Contains(ct, "audio/mpeg"), strings.Contains(ct, "audio/mp3"):
+		return ".mp3"
+	case strings.Contains(ct, "audio/ogg"):
+		return ".ogg"
+	case strings.Contains(ct, "audio/flac"), strings.Contains(ct, "audio/x-flac"):
+		return ".flac"
+	case strings.Contains(ct, "audio/mp4"), strings.Contains(ct, "audio/m4a"), strings.Contains(ct, "audio/x-m4a"):
+		return ".m4a"
+	case strings.Contains(ct, "audio/webm"):
+		return ".webm"
+	default:
+		return ".wav"
+	}
 }

@@ -1,0 +1,114 @@
+{
+  "name": "voice_assistant_memory",
+  "description": "Voice pipeline with semantic memory: STT → embed → vector search → DB lookup → LLM → TTS → embed → store vector + text.",
+  "type": "pipeline",
+  "steps": [
+    {
+      "id": "stt",
+      "node": "voice_stt",
+      "input": {
+        "audio_url": "{{.input.audio_url}}"
+      }
+    },
+    {
+      "id": "nodes",
+      "node": "scaffold_list",
+      "input": {}
+    },
+    {
+      "id": "db_init",
+      "node": "memory_db_init",
+      "input": {},
+      "on_error": "ignore_error"
+    },
+    {
+      "id": "embed_query",
+      "node": "embed_text",
+      "input": {
+        "text": "{{.stt.transcript}}"
+      },
+      "on_error": "ignore_error"
+    },
+    {
+      "id": "memory_search",
+      "node": "memory_search",
+      "input": {
+        "vector": "{{.embed_query.vector}}"
+      },
+      "on_error": "ignore_error"
+    },
+    {
+      "id": "memory_db",
+      "node": "memory_db_lookup",
+      "input": {
+        "ids": "{{.memory_search.results}}"
+      },
+      "on_error": "ignore_error"
+    },
+    {
+      "id": "llm",
+      "node": "voice_llm",
+      "input": {
+        "message":         "{{.stt.transcript}}",
+        "history":         "{{.input.history}}",
+        "available_nodes": "{{.nodes.nodes}}",
+        "memory_context":  "{{.memory_db.rows}}"
+      }
+    },
+    {
+      "id": "tts",
+      "node": "voice_tts",
+      "input": {
+        "text": "{{default .llm.response \"I was unable to complete that request.\"}}"
+      }
+    },
+    {
+      "id": "gen_id",
+      "node": "gen_memory_id",
+      "input": {}
+    },
+    {
+      "id": "embed_exchange",
+      "node": "embed_text",
+      "input": {
+        "text": "User: {{.stt.transcript}} Assistant: {{.llm.response}}"
+      },
+      "on_error": "ignore_error"
+    },
+    {
+      "id": "store_vector",
+      "node": "memory_upsert",
+      "input": {
+        "id":     "{{.gen_id.result}}",
+        "vector": "{{.embed_exchange.vector}}"
+      },
+      "on_error": "ignore_error"
+    },
+    {
+      "id": "store_text",
+      "node": "memory_db_insert",
+      "input": {
+        "id":   "{{.gen_id.result}}",
+        "text": "User: {{.stt.transcript}} Assistant: {{.llm.response}}"
+      },
+      "on_error": "ignore_error"
+    }
+  ],
+  "output": {
+    "audio_base64": "{{.tts.audio_base64}}",
+    "content_type": "{{.tts.content_type}}",
+    "transcript":   "{{.stt.transcript}}",
+    "response":     "{{.llm.response}}",
+    "history":      "{{.llm.history}}"
+  },
+  "input": {
+    "audio_url": {
+      "type": "string",
+      "required": true
+    },
+    "history": {
+      "type": "array",
+      "required": false
+    }
+  }
+}

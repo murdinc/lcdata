@@ -1,0 +1,10 @@
+{
+  "name": "gen_memory_id",
+  "description": "Generates a unique memory ID using the current Unix nanosecond timestamp.",
+  "type": "transform",
+  "template": "mem-{{unix}}",
+  "input": {},
+  "output": {
+    "result": { "type": "string" }
+  }
+}

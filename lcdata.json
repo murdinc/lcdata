@@ -1,7 +1,7 @@
 {
   "port": 8080,
   "jwt_secret": "change-this-in-production",
-  "require_jwt": true,
+  "require_jwt": false,
   "nodes_path": "./nodes",
   "env": "default",
   "log_level": "info",

@@ -1,0 +1,10 @@
+{
+  "name": "scaffold_list",
+  "description": "Lists all currently loaded lcdata nodes, returning their summaries (name, description, type, input schema, output schema).",
+  "type": "scaffold",
+  "operation": "list",
+  "output": {
+    "nodes": { "type": "array" },
+    "count": { "type": "number" }
+  }
+}

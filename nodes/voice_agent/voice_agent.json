@@ -1,0 +1,111 @@
+{
+  "name": "voice_agent",
+  "description": "Self-improving voice agent. Classifies intent, routes to the right capability pipeline, builds new capabilities when needed.",
+  "type": "pipeline",
+  "steps": [
+    {
+      "id": "extract",
+      "node": "intent_extract",
+      "input": {
+        "message": "{{.input.message}}"
+      }
+    },
+    {
+      "id": "parse",
+      "node": "parse_intent_params",
+      "input": {
+        "intent_json": "{{.extract.response}}"
+      }
+    },
+    {
+      "id": "action",
+      "switch": "{{.parse.stdout}}",
+      "cases": {
+        "delete_file": {
+          "node": "cap_delete_file",
+          "input": {
+            "name":      "{{index (fromJSON .parse.stdout) \"name\"}}",
+            "directory": "{{index (fromJSON .parse.stdout) \"directory\"}}"
+          }
+        },
+        "create_file": {
+          "node": "cap_create_file",
+          "input": {
+            "name":      "{{index (fromJSON .parse.stdout) \"name\"}}",
+            "content":   "{{index (fromJSON .parse.stdout) \"content\"}}",
+            "directory": "{{index (fromJSON .parse.stdout) \"directory\"}}"
+          }
+        },
+        "list_files": {
+          "node": "cap_list_files",
+          "input": {
+            "directory": "{{index (fromJSON .parse.stdout) \"directory\"}}"
+          }
+        },
+        "web_search": {
+          "node": "cap_web_search",
+          "input": {
+            "query":    "{{index (fromJSON .parse.stdout) \"query\"}}",
+            "question": "{{.input.message}}"
+          }
+        },
+        "fetch_and_save": {
+          "node": "cap_fetch_save",
+          "input": {
+            "url":       "{{index (fromJSON .parse.stdout) \"url\"}}",
+            "filename":  "{{index (fromJSON .parse.stdout) \"filename\"}}",
+            "directory": "{{index (fromJSON .parse.stdout) \"directory\"}}"
+          }
+        },
+        "build_capability": {
+          "node": "cap_build",
+          "input": {
+            "description":      "{{index (fromJSON .parse.stdout) \"description\"}}",
+            "original_message": "{{.input.message}}",
+            "history":          "{{.input.history}}",
+            "available_nodes":  "{{.input.available_nodes}}",
+            "memory_context":   "{{.input.memory_context}}"
+          }
+        },
+        "default": {
+          "node": "cap_question",
+          "input": {
+            "message":         "{{.input.message}}",
+            "history":         "{{.input.history}}",
+            "available_nodes": "{{.input.available_nodes}}",
+            "memory_context":  "{{.input.memory_context}}"
+          }
+        }
+      }
+    }
+  ],
+  "output": {
+    "message":       "{{.action.message}}",
+    "ok":            "{{.action.ok}}",
+    "history":       "{{.action.history}}",
+    "intent":        "{{.parse.stdout}}",
+    "routed_intent": "{{index (fromJSON .parse.stdout) \"intent\"}}"
+  },
+  "input": {
+    "message": {
+      "type": "string",
+      "required": true,
+      "description": "The user's message"
+    },
+    "history": {
+      "type": "array",
+      "required": false,
+      "description": "Conversation history"
+    },
+    "available_nodes": {
+      "type": "array",
+      "required": false,
+      "description": "List of loaded nodes for context"
+    },
+    "memory_context": {
+      "type": "array",
+      "required": false,
+      "description": "Relevant past memory snippets"
+    }
+  }
+}

@@ -16,14 +16,26 @@ type EnvironmentConfigs struct {
 
 // EnvironmentConfig holds credentials and connection strings for one environment
 type EnvironmentConfig struct {
-	AnthropicKey   string            `json:"anthropicKey"`
-	OllamaEndpoint string            `json:"ollamaEndpoint"`
-	OpenAIKey      string            `json:"openaiKey"`
-	ElevenLabsKey  string            `json:"elevenlabsKey"`
-	DeepgramKey    string            `json:"deepgramKey"`
-	BraveKey       string            `json:"braveKey"`
-	SearxngEndpoint string           `json:"searxngEndpoint"`
-	DBConnections  map[string]string `json:"dbConnections"`
+	AnthropicKey    string            `json:"anthropicKey"`
+	OllamaEndpoint  string            `json:"ollamaEndpoint"`
+	OpenAIKey       string            `json:"openaiKey"`
+	ElevenLabsKey   string            `json:"elevenlabsKey"`
+	DeepgramKey     string            `json:"deepgramKey"`
+	BraveKey        string            `json:"braveKey"`
+	SearxngEndpoint string            `json:"searxngEndpoint"`
+	DBConnections   map[string]string `json:"dbConnections"`
+
+	// Local / open-source speech providers
+	WhisperCppBin   string `json:"whisperCppBin"`   // path to whisper-cli binary (default: "whisper-cli")
+	WhisperCppModel string `json:"whisperCppModel"` // default model path; overridden by node.model
+	PiperBin        string `json:"piperBin"`        // path to piper binary (default: "piper")
+
+	// Springg vector store
+	SpringgEndpoint string `json:"springgEndpoint"` // springg HTTP endpoint (default: http://localhost:8181)
+	SpringgKey      string `json:"springgKey"`      // JWT bearer token for springg auth
+
+	// Runtime-injected by Runner (not from env file)
+	NodesPath string `json:"-"` // path to nodes directory; set from Config.NodesPath
 }
 
 // LoadEnvironmentConfigs looks for lcdataenv.json in the home dir, then ./nodes/env.json
@@ -91,6 +103,21 @@ func (ec EnvironmentConfigs) GetEnvironment(name string) (EnvironmentConfig, err
 	}
 	if env.SearxngEndpoint == "" {
 		env.SearxngEndpoint = os.Getenv("SEARXNG_ENDPOINT")
+	}
+	if env.WhisperCppBin == "" {
+		env.WhisperCppBin = os.Getenv("WHISPER_CPP_BIN")
+	}
+	if env.WhisperCppModel == "" {
+		env.WhisperCppModel = os.Getenv("WHISPER_CPP_MODEL")
+	}
+	if env.PiperBin == "" {
+		env.PiperBin = os.Getenv("PIPER_BIN")
+	}
+	if env.SpringgEndpoint == "" {
+		env.SpringgEndpoint = os.Getenv("SPRINGG_ENDPOINT")
+	}
+	if env.SpringgKey == "" {
+		env.SpringgKey = os.Getenv("SPRINGG_KEY")
 	}
 	return env, nil
 }

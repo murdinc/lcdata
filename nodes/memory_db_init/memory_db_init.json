@@ -1,0 +1,14 @@
+{
+  "name": "memory_db_init",
+  "description": "Ensures the lcdata_memory table exists. Safe to run on every pipeline call.",
+  "type": "database",
+  "driver": "mysql",
+  "connection": "memory",
+  "operation": "exec",
+  "query": "CREATE TABLE IF NOT EXISTS lcdata_memory (id VARCHAR(64) PRIMARY KEY, text TEXT NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)",
+  "params": [],
+  "input": {},
+  "output": {
+    "ok": { "type": "boolean" }
+  }
+}

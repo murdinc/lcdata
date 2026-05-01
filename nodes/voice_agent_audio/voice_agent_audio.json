@@ -1,0 +1,116 @@
+{
+  "name": "voice_agent_audio",
+  "description": "Full voice pipeline: STT → memory → intent routing (voice_agent) → TTS → store memory. Drop-in replacement for voice_assistant_memory with self-improving intent routing.",
+  "type": "pipeline",
+  "steps": [
+    {
+      "id": "stt",
+      "node": "voice_stt",
+      "input": {
+        "audio_url": "{{.input.audio_url}}"
+      }
+    },
+    {
+      "id": "nodes",
+      "node": "scaffold_list",
+      "input": {}
+    },
+    {
+      "id": "db_init",
+      "node": "memory_db_init",
+      "input": {},
+      "on_error": "ignore_error"
+    },
+    {
+      "id": "embed_query",
+      "node": "embed_text",
+      "input": {
+        "text": "{{.stt.transcript}}"
+      },
+      "on_error": "ignore_error"
+    },
+    {
+      "id": "memory_search",
+      "node": "memory_search",
+      "input": {
+        "vector": "{{.embed_query.vector}}"
+      },
+      "on_error": "ignore_error"
+    },
+    {
+      "id": "memory_db",
+      "node": "memory_db_lookup",
+      "input": {
+        "ids": "{{.memory_search.results}}"
+      },
+      "on_error": "ignore_error"
+    },
+    {
+      "id": "route",
+      "node": "voice_agent",
+      "input": {
+        "message":         "{{.stt.transcript}}",
+        "history":         "{{.input.history}}",
+        "available_nodes": "{{.nodes.nodes}}",
+        "memory_context":  "{{.memory_db.rows}}"
+      }
+    },
+    {
+      "id": "tts",
+      "node": "voice_tts",
+      "input": {
+        "text": "{{default .route.message \"I was unable to complete that request.\"}}"
+      }
+    },
+    {
+      "id": "gen_id",
+      "node": "gen_memory_id",
+      "input": {},
+      "on_error": "ignore_error"
+    },
+    {
+      "id": "embed_exchange",
+      "node": "embed_text",
+      "input": {
+        "text": "User: {{.stt.transcript}} Assistant: {{.route.message}}"
+      },
+      "on_error": "ignore_error"
+    },
+    {
+      "id": "store_vector",
+      "node": "memory_upsert",
+      "input": {
+        "id":     "{{.gen_id.result}}",
+        "vector": "{{.embed_exchange.vector}}"
+      },
+      "on_error": "ignore_error"
+    },
+    {
+      "id": "store_text",
+      "node": "memory_db_insert",
+      "input": {
+        "id":   "{{.gen_id.result}}",
+        "text": "User: {{.stt.transcript}} Assistant: {{.route.message}}"
+      },
+      "on_error": "ignore_error"
+    }
+  ],
+  "output": {
+    "audio_base64": "{{.tts.audio_base64}}",
+    "content_type": "{{.tts.content_type}}",
+    "transcript":   "{{.stt.transcript}}",
+    "response":     "{{.route.message}}",
+    "history":      "{{.route.history}}",
+    "intent":       "{{.route.intent}}"
+  },
+  "input": {
+    "audio_url": {
+      "type": "string",
+      "required": true
+    },
+    "history": {
+      "type": "array",
+      "required": false
+    }
+  }
+}

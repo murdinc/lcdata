@@ -1,0 +1,45 @@
+{
+  "name": "cap_fetch_save",
+  "description": "Fetch capability: fetches the contents of a URL and saves it to a file.",
+  "type": "pipeline",
+  "steps": [
+    {
+      "id": "fetch",
+      "node": "fetch_url",
+      "on_error": "ignore_error",
+      "input": {
+        "url": "{{.input.url}}"
+      }
+    },
+    {
+      "id": "save",
+      "node": "write_file",
+      "on_error": "ignore_error",
+      "input": {
+        "path":    "{{default .input.directory \"~/Desktop\"}}/{{.input.filename}}",
+        "content": "{{.fetch.body}}"
+      }
+    }
+  ],
+  "output": {
+    "message": "{{if .save.ok}}Saved {{.input.filename}} to {{default .input.directory \"~/Desktop\"}}.{{else}}Failed to save the file.{{end}}",
+    "ok":      "{{.save.ok}}"
+  },
+  "input": {
+    "url": {
+      "type": "string",
+      "required": true,
+      "description": "URL to fetch"
+    },
+    "filename": {
+      "type": "string",
+      "required": true,
+      "description": "Filename to save as on disk"
+    },
+    "directory": {
+      "type": "string",
+      "required": false,
+      "description": "Directory to save in. Defaults to ~/Desktop."
+    }
+  }
+}

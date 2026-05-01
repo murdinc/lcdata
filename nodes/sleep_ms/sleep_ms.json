@@ -1,0 +1,16 @@
+{
+  "name": "sleep_ms",
+  "description": "Sleeps for a given number of milliseconds. Used to wait for hot-reload after node creation.",
+  "type": "command",
+  "command": "python3",
+  "args": ["-c", "import time,os; time.sleep(float(os.environ.get('MS','600'))/1000)"],
+  "env": {
+    "MS": "{{.input.ms}}"
+  },
+  "input": {
+    "ms": { "type": "string", "required": false, "description": "Milliseconds to sleep (default 600)" }
+  },
+  "output": {
+    "stdout": { "type": "string" }
+  }
+}

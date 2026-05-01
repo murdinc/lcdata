@@ -1,0 +1,17 @@
+{
+  "name": "scaffold_delete",
+  "description": "Removes a named lcdata node directory from disk. The server will deregister the node automatically via hot-reload.",
+  "type": "scaffold",
+  "operation": "delete",
+  "input": {
+    "name": {
+      "type": "string",
+      "required": true
+    }
+  },
+  "output": {
+    "name":    { "type": "string" },
+    "path":    { "type": "string" },
+    "deleted": { "type": "boolean" }
+  }
+}

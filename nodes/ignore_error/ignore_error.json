@@ -1,0 +1,13 @@
+{
+  "name": "ignore_error",
+  "description": "No-op error handler. Swallows step errors so the pipeline continues.",
+  "type": "transform",
+  "template": "ok",
+  "input": {
+    "error":   { "type": "string", "required": false },
+    "step_id": { "type": "string", "required": false }
+  },
+  "output": {
+    "result": { "type": "string" }
+  }
+}

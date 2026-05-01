@@ -1,0 +1,20 @@
+{
+  "name": "parse_intent_params",
+  "description": "Parses the JSON output from intent_extract, stripping markdown fences, and outputs flat key=value to stdout as JSON.",
+  "type": "command",
+  "command": "python3",
+  "args": ["parse_intent_params.py"],
+  "env": {
+    "INTENT_JSON": "{{.input.intent_json}}"
+  },
+  "input": {
+    "intent_json": {
+      "type": "string",
+      "required": true,
+      "description": "Raw LLM output from intent_extract (may contain markdown fences)"
+    }
+  },
+  "output": {
+    "stdout": { "type": "string" }
+  }
+}

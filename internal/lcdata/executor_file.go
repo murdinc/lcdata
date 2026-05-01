@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 func executeFile(
@@ -18,6 +19,18 @@ func executeFile(
 	path := stringVal(inputs, "path")
 	if path == "" {
 		return nil, fmt.Errorf("input.path is required for file nodes")
+	}
+
+	// Expand ~ to home directory, or treat bare names as relative to home
+	if strings.HasPrefix(path, "~/") {
+		if home, err := os.UserHomeDir(); err == nil {
+			path = filepath.Join(home, path[2:])
+		}
+	} else if !strings.HasPrefix(path, "/") {
+		// Bare name like "Desktop" or "Documents/reports" → ~/Desktop, ~/Documents/reports
+		if home, err := os.UserHomeDir(); err == nil {
+			path = filepath.Join(home, path)
+		}
 	}
 
 	// Clean path to prevent directory traversal

@@ -1,0 +1,49 @@
+{
+  "name": "safe_delete_file",
+  "description": "Deletes a file by name without requiring the exact path. Lists the directory first, fuzzy-matches the filename, then deletes the exact match. Use this instead of delete_file when given a human name like 'Hello World'.",
+  "type": "pipeline",
+  "steps": [
+    {
+      "id": "list",
+      "node": "list_directory",
+      "input": {
+        "path": "{{default .input.directory \"~/Desktop\"}}"
+      }
+    },
+    {
+      "id": "find",
+      "node": "find_file",
+      "on_error": "ignore_error",
+      "input": {
+        "name":      "{{.input.name}}",
+        "directory": "{{default .input.directory \"~/Desktop\"}}",
+        "files":     "{{.list.files}}"
+      }
+    },
+    {
+      "id": "delete",
+      "node": "delete_file",
+      "on_error": "ignore_error",
+      "input": {
+        "path": "{{.find.stdout}}"
+      }
+    }
+  ],
+  "output": {
+    "path":    "{{.find.stdout}}",
+    "ok":      "{{.delete.ok}}",
+    "message": "{{if .delete.ok}}Deleted {{.find.stdout}}{{else if .find.stdout}}Found file but deletion failed{{else}}No file named '{{.input.name}}' was found{{end}}"
+  },
+  "input": {
+    "name": {
+      "type": "string",
+      "required": true,
+      "description": "The filename to delete, without path"
+    },
+    "directory": {
+      "type": "string",
+      "required": false,
+      "description": "Full path to directory, e.g. ~/Desktop or ~/Documents. Defaults to ~/Desktop if omitted."
+    }
+  }
+}

@@ -1,0 +1,52 @@
+{
+  "name": "voice_assistant",
+  "description": "Full voice pipeline: audio → STT → scaffold_list (context) → LLM → TTS → audio. The LLM receives the live node list on every turn so it always knows what is loaded.",
+  "type": "pipeline",
+  "steps": [
+    {
+      "id": "stt",
+      "node": "voice_stt",
+      "input": {
+        "audio_url": "{{.input.audio_url}}"
+      }
+    },
+    {
+      "id": "nodes",
+      "node": "scaffold_list",
+      "input": {}
+    },
+    {
+      "id": "llm",
+      "node": "voice_llm",
+      "input": {
+        "message":         "{{.stt.transcript}}",
+        "history":         "{{.input.history}}",
+        "available_nodes": "{{.nodes.nodes}}"
+      }
+    },
+    {
+      "id": "tts",
+      "node": "voice_tts",
+      "input": {
+        "text": "{{default .llm.response \"I was unable to complete that request.\"}}"
+      }
+    }
+  ],
+  "output": {
+    "audio_base64": "{{.tts.audio_base64}}",
+    "content_type": "{{.tts.content_type}}",
+    "transcript":   "{{.stt.transcript}}",
+    "response":     "{{.llm.response}}",
+    "history":      "{{.llm.history}}"
+  },
+  "input": {
+    "audio_url": {
+      "type": "string",
+      "required": true
+    },
+    "history": {
+      "type": "array",
+      "required": false
+    }
+  }
+}

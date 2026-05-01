@@ -1,0 +1,20 @@
+{
+  "name": "parse_design",
+  "description": "Extracts name, config, scripts, and test_input from scaffold_designer_llm JSON output. Handles markdown fences and special _scripts/_test_input fields.",
+  "type": "command",
+  "command": "python3",
+  "args": ["parse_design.py"],
+  "env": {
+    "DESIGN_JSON": "{{.input.design}}"
+  },
+  "input": {
+    "design": {
+      "type": "string",
+      "required": true,
+      "description": "Raw JSON output from scaffold_designer_llm"
+    }
+  },
+  "output": {
+    "stdout": { "type": "string" }
+  }
+}

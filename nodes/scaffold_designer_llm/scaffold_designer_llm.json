@@ -1,0 +1,21 @@
+{
+  "name": "scaffold_designer_llm",
+  "description": "LLM node that designs a new lcdata node config from a description. Uses the full node schema as its system prompt. Returns raw JSON ready for scaffold_create.",
+  "type": "llm",
+  "provider": "anthropic",
+  "model": "claude-haiku-4-5-20251001",
+  "system_prompt_file": "system.md",
+  "temperature": 0.2,
+  "max_tokens": 2048,
+  "stream": false,
+  "input": {
+    "message": {
+      "type": "string",
+      "required": true
+    }
+  },
+  "output": {
+    "response": { "type": "string" },
+    "usage":    { "type": "object" }
+  }
+}

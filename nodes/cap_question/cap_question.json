@@ -1,0 +1,44 @@
+{
+  "name": "cap_question",
+  "description": "General question/conversation capability: routes to voice_llm for open-ended questions and conversation.",
+  "type": "pipeline",
+  "steps": [
+    {
+      "id": "answer",
+      "node": "voice_llm",
+      "input": {
+        "message":          "{{.input.message}}",
+        "history":          "{{.input.history}}",
+        "available_nodes":  "{{.input.available_nodes}}",
+        "memory_context":   "{{.input.memory_context}}"
+      }
+    }
+  ],
+  "output": {
+    "message": "{{.answer.response}}",
+    "history": "{{.answer.history}}",
+    "ok":      "true"
+  },
+  "input": {
+    "message": {
+      "type": "string",
+      "required": true,
+      "description": "User message"
+    },
+    "history": {
+      "type": "array",
+      "required": false,
+      "description": "Conversation history"
+    },
+    "available_nodes": {
+      "type": "array",
+      "required": false,
+      "description": "List of loaded nodes"
+    },
+    "memory_context": {
+      "type": "array",
+      "required": false,
+      "description": "Relevant memory snippets"
+    }
+  }
+}

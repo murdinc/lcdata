@@ -1,0 +1,37 @@
+{
+  "name": "cap_create_file",
+  "description": "Create capability: writes a file with given content. Outputs a voice-friendly message.",
+  "type": "pipeline",
+  "steps": [
+    {
+      "id": "write",
+      "node": "write_file",
+      "on_error": "ignore_error",
+      "input": {
+        "path":    "{{default .input.directory \"~/Desktop\"}}/{{.input.name}}",
+        "content": "{{.input.content}}"
+      }
+    }
+  ],
+  "output": {
+    "message": "{{if .write.ok}}Created {{.input.name}} in {{default .input.directory \"~/Desktop\"}}.{{else}}Failed to create the file.{{end}}",
+    "ok":      "{{.write.ok}}"
+  },
+  "input": {
+    "name": {
+      "type": "string",
+      "required": true,
+      "description": "Filename to create"
+    },
+    "content": {
+      "type": "string",
+      "required": false,
+      "description": "File content"
+    },
+    "directory": {
+      "type": "string",
+      "required": false,
+      "description": "Directory to create the file in. Defaults to ~/Desktop."
+    }
+  }
+}

@@ -59,7 +59,6 @@ func executeBraveSearch(ctx context.Context, query string, count int, env Enviro
 		return nil, fmt.Errorf("failed to build Brave request: %w", err)
 	}
 	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Accept-Encoding", "gzip")
 	req.Header.Set("X-Subscription-Token", env.BraveKey)
 
 	resp, err := http.DefaultClient.Do(req)

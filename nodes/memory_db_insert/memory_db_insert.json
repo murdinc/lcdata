@@ -1,0 +1,21 @@
+{
+  "name": "memory_db_insert",
+  "description": "Insert a memory exchange (id + text) into MySQL lcdata_memory table.",
+  "type": "database",
+  "driver": "mysql",
+  "connection": "memory",
+  "operation": "exec",
+  "query": "INSERT INTO lcdata_memory (id, text) VALUES (?, ?) ON DUPLICATE KEY UPDATE text = VALUES(text)",
+  "params": [
+    "{{.input.id}}",
+    "{{.input.text}}"
+  ],
+  "input": {
+    "id":   { "type": "string", "required": true },
+    "text": { "type": "string", "required": true }
+  },
+  "output": {
+    "rows_affected": { "type": "integer" },
+    "ok":            { "type": "boolean" }
+  }
+}

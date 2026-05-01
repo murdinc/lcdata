@@ -1,0 +1,21 @@
+{
+  "name": "intent_extract",
+  "description": "Extracts structured intent + parameters from a user message. Returns pure JSON with intent and all relevant params.",
+  "type": "llm",
+  "provider": "ollama",
+  "model": "llama3.2:1b",
+  "system_prompt_file": "system.md",
+  "temperature": 0.1,
+  "max_tokens": 256,
+  "stream": false,
+  "input": {
+    "message": {
+      "type": "string",
+      "required": true,
+      "description": "The raw user message to classify"
+    }
+  },
+  "output": {
+    "response": { "type": "string" }
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "name": "embed_text",
+  "description": "Embed text using Ollama nomic-embed-text. Returns a 768-dim vector for use with springg memory.",
+  "type": "embedding",
+  "provider": "ollama",
+  "model": "nomic-embed-text",
+  "input": {
+    "text": {
+      "type": "string",
+      "required": true
+    }
+  },
+  "output": {
+    "vector":     { "type": "array" },
+    "dimensions": { "type": "integer" },
+    "model":      { "type": "string" }
+  }
+}

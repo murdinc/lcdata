@@ -1,0 +1,18 @@
+{
+  "name": "format_file_list",
+  "description": "Formats a file list into a voice-friendly sentence without an LLM call.",
+  "type": "command",
+  "command": "python3",
+  "args": ["format_file_list.py"],
+  "env": {
+    "FILES":     "{{toJSON .input.files}}",
+    "DIRECTORY": "{{.input.directory}}"
+  },
+  "input": {
+    "files":     { "type": "array",  "required": true },
+    "directory": { "type": "string", "required": false }
+  },
+  "output": {
+    "stdout": { "type": "string" }
+  }
+}

@@ -1,0 +1,34 @@
+{
+  "name": "cap_list_files",
+  "description": "List capability: lists files in a directory and formats the result as a voice sentence (no LLM call).",
+  "type": "pipeline",
+  "steps": [
+    {
+      "id": "list",
+      "node": "list_directory",
+      "on_error": "ignore_error",
+      "input": {
+        "path": "{{default .input.directory \"~/Desktop\"}}"
+      }
+    },
+    {
+      "id": "speak",
+      "node": "format_file_list",
+      "input": {
+        "files":     "{{.list.files}}",
+        "directory": "{{default .input.directory \"~/Desktop\"}}"
+      }
+    }
+  ],
+  "output": {
+    "message": "{{.speak.stdout}}",
+    "ok":      "true"
+  },
+  "input": {
+    "directory": {
+      "type": "string",
+      "required": false,
+      "description": "Directory to list. Defaults to ~/Desktop."
+    }
+  }
+}

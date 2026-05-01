@@ -1,0 +1,30 @@
+{
+  "name": "scaffold_create",
+  "description": "Creates a new lcdata node on disk. Accepts the node name, a JSON config string (must pass validation), and an optional system prompt. The server picks up the new node automatically via hot-reload.",
+  "type": "scaffold",
+  "operation": "create",
+  "input": {
+    "name": {
+      "type": "string",
+      "required": true
+    },
+    "config": {
+      "type": "string",
+      "required": true
+    },
+    "system_prompt": {
+      "type": "string",
+      "required": false
+    },
+    "scripts": {
+      "type": "object",
+      "required": false,
+      "description": "Map of filename to content — written into the node directory alongside the JSON"
+    }
+  },
+  "output": {
+    "name":    { "type": "string" },
+    "path":    { "type": "string" },
+    "created": { "type": "boolean" }
+  }
+}

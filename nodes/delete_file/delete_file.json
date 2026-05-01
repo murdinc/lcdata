@@ -1,0 +1,16 @@
+{
+  "name": "delete_file",
+  "description": "Permanently deletes a file or directory at the given path. Path supports ~ for home directory.",
+  "type": "file",
+  "operation": "delete",
+  "input": {
+    "path": {
+      "type": "string",
+      "required": true
+    }
+  },
+  "output": {
+    "path": { "type": "string" },
+    "ok":   { "type": "boolean" }
+  }
+}

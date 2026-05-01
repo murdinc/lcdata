@@ -1,0 +1,38 @@
+{
+  "name": "cap_web_search",
+  "description": "Web search capability: searches the web, passes top results to an LLM to answer the question naturally.",
+  "type": "pipeline",
+  "steps": [
+    {
+      "id": "search",
+      "node": "web_search",
+      "on_error": "ignore_error",
+      "input": {
+        "query": "{{.input.query}}"
+      }
+    },
+    {
+      "id": "speak",
+      "node": "narrate",
+      "input": {
+        "message": "Search results: {{toJSON .search.results}}\n\nQuestion: {{.input.question}}"
+      }
+    }
+  ],
+  "output": {
+    "message": "{{.speak.response}}",
+    "ok":      "true"
+  },
+  "input": {
+    "query": {
+      "type": "string",
+      "required": true,
+      "description": "Search query"
+    },
+    "question": {
+      "type": "string",
+      "required": false,
+      "description": "Original user question for context"
+    }
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "name": "memory_db_lookup",
+  "description": "Look up memory exchange texts by IDs returned from springg vector search.",
+  "type": "database",
+  "driver": "mysql",
+  "connection": "memory",
+  "operation": "lookup",
+  "query": "SELECT id, text FROM lcdata_memory WHERE id IN (?)",
+  "input": {
+    "ids": { "type": "array", "required": true }
+  },
+  "output": {
+    "rows":  { "type": "array" },
+    "count": { "type": "integer" }
+  }
+}

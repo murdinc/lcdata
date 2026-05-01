@@ -1,0 +1,18 @@
+{
+  "name": "memory_search",
+  "description": "Semantic search over past voice assistant exchanges stored in springg. Returns top 3 relevant memories.",
+  "type": "vector",
+  "operation": "search",
+  "index": "lcdata",
+  "top_k": 3,
+  "input": {
+    "vector": {
+      "type": "array",
+      "required": true
+    }
+  },
+  "output": {
+    "results": { "type": "array" },
+    "count":   { "type": "integer" }
+  }
+}

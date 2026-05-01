@@ -1,0 +1,37 @@
+{
+  "name": "builder_llm",
+  "description": "Self-building LLM agent. Given a description of a needed capability, it lists existing nodes, designs a new one, creates it with scaffold_create, and confirms.",
+  "type": "llm",
+  "provider": "ollama",
+  "model": "qwen3.5:4b",
+  "system_prompt_file": "system.md",
+  "temperature": 0.3,
+  "max_tokens": 2048,
+  "stream": false,
+  "max_history": 4,
+  "max_tool_turns": 8,
+  "tools": [
+    "scaffold_list",
+    "scaffold_read",
+    "scaffold_create",
+    "scaffold_run",
+    "web_search",
+    "fetch_url"
+  ],
+  "input": {
+    "message": {
+      "type": "string",
+      "required": true,
+      "description": "Description of capability to build"
+    },
+    "history": {
+      "type": "array",
+      "required": false
+    }
+  },
+  "output": {
+    "response": { "type": "string" },
+    "history":  { "type": "array" },
+    "usage":    { "type": "object" }
+  }
+}

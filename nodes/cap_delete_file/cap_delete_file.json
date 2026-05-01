@@ -1,0 +1,32 @@
+{
+  "name": "cap_delete_file",
+  "description": "Delete capability: finds and deletes a file by name. Outputs a voice-friendly message.",
+  "type": "pipeline",
+  "steps": [
+    {
+      "id": "delete",
+      "node": "safe_delete_file",
+      "on_error": "ignore_error",
+      "input": {
+        "name":      "{{.input.name}}",
+        "directory": "{{.input.directory}}"
+      }
+    }
+  ],
+  "output": {
+    "message": "{{.delete.message}}",
+    "ok":      "{{.delete.ok}}"
+  },
+  "input": {
+    "name": {
+      "type": "string",
+      "required": true,
+      "description": "Filename to delete, without path"
+    },
+    "directory": {
+      "type": "string",
+      "required": false,
+      "description": "Directory to search in. Defaults to ~/Desktop."
+    }
+  }
+}

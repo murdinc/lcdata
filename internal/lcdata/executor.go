@@ -74,6 +74,16 @@ func executeLeafNode(
 		})
 	case NodeTypeFile:
 		return executeFile(ctx, node, inputs, events)
+	case NodeTypeVector:
+		return retryable(func() (map[string]any, error) {
+			return executeVector(ctx, node, inputs, env, events)
+		})
+	case NodeTypeEmbedding:
+		return retryable(func() (map[string]any, error) {
+			return executeEmbedding(ctx, node, inputs, env, events)
+		})
+	case NodeTypeScaffold:
+		return executeScaffold(ctx, node, inputs, env, events)
 	default:
 		return nil, fmt.Errorf("unknown node type: %s", node.Type)
 	}

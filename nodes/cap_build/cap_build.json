@@ -1,0 +1,88 @@
+{
+  "name": "cap_build",
+  "description": "Builds a new node for an unknown capability using a reliable generate-then-execute approach: designer LLM outputs pure JSON, deterministic steps create and test it, then re-runs the original request to verify.",
+  "type": "pipeline",
+  "steps": [
+    {
+      "id": "node_list",
+      "node": "scaffold_list"
+    },
+    {
+      "id": "build_loop",
+      "loop": {
+        "max_iterations": 3,
+        "until": "{{ne (default \"build_capability\" .try_result.routed_intent) \"build_capability\"}}",
+        "steps": [
+          {
+            "id": "design",
+            "node": "scaffold_designer_llm",
+            "input": {
+              "message": "{{if (default \"\" .tested.error)}}Previous attempt failed during testing: {{.tested.error}}. Try a different approach. {{end}}Build a node for this capability: {{.input.description}}\n\nOriginal user request: {{.input.original_message}}\n\nExisting nodes (do not duplicate):\n{{range .node_list.nodes}}- {{.name}}: {{.description}}\n{{end}}"
+            }
+          },
+          {
+            "id": "parsed",
+            "node": "parse_design",
+            "input": {
+              "design": "{{.design.response}}"
+            }
+          },
+          {
+            "id": "created",
+            "node": "scaffold_create",
+            "on_error": "ignore_error",
+            "input": {
+              "name":    "{{.parsed.stdout | fromJSON | index \"name\"}}",
+              "config":  "{{.parsed.stdout | fromJSON | index \"config\" | toJSON}}",
+              "scripts": "{{.parsed.stdout | fromJSON | index \"scripts\" | toJSON}}"
+            }
+          },
+          {
+            "id": "wait",
+            "node": "sleep_ms",
+            "input": { "ms": "700" }
+          },
+          {
+            "id": "tested",
+            "node": "scaffold_run",
+            "on_error": "ignore_error",
+            "input": {
+              "name":  "{{.parsed.stdout | fromJSON | index \"name\"}}",
+              "input": "{{.parsed.stdout | fromJSON | index \"test_input\" | toJSON}}"
+            }
+          },
+          {
+            "id": "try_result",
+            "node": "voice_agent",
+            "on_error": "ignore_error",
+            "input": {
+              "message":         "{{.input.original_message}}",
+              "history":         "{{.input.history}}",
+              "available_nodes": "{{.input.available_nodes}}",
+              "memory_context":  "{{.input.memory_context}}"
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "output": {
+    "message": "{{if (default \"\" .try_result.message)}}{{.try_result.message}}{{else}}I built a new capability but wasn't able to verify it worked. Try your request again.{{end}}",
+    "ok":      "{{ne (default \"build_capability\" .try_result.routed_intent) \"build_capability\"}}"
+  },
+  "input": {
+    "description": {
+      "type": "string",
+      "required": true,
+      "description": "Description of the capability to build"
+    },
+    "original_message": {
+      "type": "string",
+      "required": true,
+      "description": "The user's original spoken request, used to verify the new capability works"
+    },
+    "history":          { "type": "array",  "required": false },
+    "available_nodes":  { "type": "array",  "required": false },
+    "memory_context":   { "type": "array",  "required": false }
+  }
+}

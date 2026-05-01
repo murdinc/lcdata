@@ -22,6 +22,9 @@ const (
 	NodeTypePipeline  NodeType = "pipeline"
 	NodeTypeSearch    NodeType = "search"
 	NodeTypeFile      NodeType = "file"
+	NodeTypeVector    NodeType = "vector"
+	NodeTypeEmbedding NodeType = "embedding"
+	NodeTypeScaffold  NodeType = "scaffold"
 )
 
 // FieldSchema defines a single input or output field
@@ -70,6 +73,15 @@ type rawNode struct {
 	SearchCount    int    `json:"search_count,omitempty"`
 
 	Operation string `json:"operation,omitempty"`
+
+	// Vector node fields (springg)
+	Index      string `json:"index,omitempty"`
+	Dimensions int    `json:"dimensions,omitempty"`
+	TopK       int    `json:"top_k,omitempty"`
+
+	// LLM conversation management
+	MaxHistory   int `json:"max_history,omitempty"`
+	MaxToolTurns int `json:"max_tool_turns,omitempty"`
 
 	RetryCount int    `json:"retry_count,omitempty"`
 	RetryDelay string `json:"retry_delay,omitempty"`
@@ -120,6 +132,15 @@ type Node struct {
 	SearchCount    int    `json:"search_count,omitempty"`
 
 	Operation string `json:"operation,omitempty"`
+
+	// Vector node fields (springg)
+	Index      string `json:"index,omitempty"`
+	Dimensions int    `json:"dimensions,omitempty"`
+	TopK       int    `json:"top_k,omitempty"`
+
+	// LLM conversation management
+	MaxHistory   int `json:"max_history,omitempty"`
+	MaxToolTurns int `json:"max_tool_turns,omitempty"`
 
 	RetryCount int    `json:"retry_count,omitempty"`
 	RetryDelay string `json:"retry_delay,omitempty"`
@@ -237,6 +258,11 @@ func parseNodeJSON(data []byte) (*Node, error) {
 		SearchProvider:   raw.SearchProvider,
 		SearchCount:      raw.SearchCount,
 		Operation:        raw.Operation,
+		Index:            raw.Index,
+		Dimensions:       raw.Dimensions,
+		TopK:             raw.TopK,
+		MaxHistory:       raw.MaxHistory,
+		MaxToolTurns:     raw.MaxToolTurns,
 		RetryCount:       raw.RetryCount,
 		RetryDelay:       raw.RetryDelay,
 		Template:         raw.Template,
@@ -337,6 +363,24 @@ func (n *Node) validate() error {
 	case NodeTypeFile:
 		if n.Operation == "" {
 			return fmt.Errorf("operation is required for file nodes (read, write, append)")
+		}
+	case NodeTypeEmbedding:
+		if n.Provider == "" {
+			return fmt.Errorf("provider is required for embedding nodes (openai, ollama)")
+		}
+	case NodeTypeVector:
+		if n.Operation == "" {
+			return fmt.Errorf("operation is required for vector nodes (upsert, search, get, delete, create_index, delete_index)")
+		}
+		if n.Index == "" {
+			return fmt.Errorf("index is required for vector nodes")
+		}
+		if n.Operation == "create_index" && n.Dimensions <= 0 {
+			return fmt.Errorf("dimensions is required for vector create_index operation")
+		}
+	case NodeTypeScaffold:
+		if n.Operation == "" {
+			return fmt.Errorf("operation is required for scaffold nodes (create, delete, list, read)")
 		}
 	case NodeTypePipeline:
 		if len(n.Steps) == 0 {

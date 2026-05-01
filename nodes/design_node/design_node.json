@@ -1,0 +1,45 @@
+{
+  "name": "design_node",
+  "description": "Designs and creates a new lcdata node from a natural language description. Lists existing nodes for context, generates a valid node JSON config via LLM, and writes it to disk. The server hot-reloads automatically.",
+  "type": "pipeline",
+  "steps": [
+    {
+      "id": "list_nodes",
+      "node": "scaffold_list",
+      "input": {}
+    },
+    {
+      "id": "design",
+      "node": "scaffold_designer_llm",
+      "input": {
+        "message": "Existing nodes for context:\n{{.list_nodes.nodes | toJSON}}\n\n---\n\nDesign a new node for the following description:\n\n{{.input.description}}"
+      }
+    },
+    {
+      "id": "create",
+      "node": "scaffold_create",
+      "input": {
+        "name": "{{.input.name}}",
+        "config": "{{.design.response}}"
+      }
+    }
+  ],
+  "output": {
+    "name":    "{{.create.name}}",
+    "path":    "{{.create.path}}",
+    "created": "{{.create.created}}",
+    "config":  "{{.design.response}}"
+  },
+  "input": {
+    "name": {
+      "type": "string",
+      "required": true,
+      "default": null
+    },
+    "description": {
+      "type": "string",
+      "required": true,
+      "default": null
+    }
+  }
+}

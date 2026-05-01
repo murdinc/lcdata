@@ -1,0 +1,47 @@
+{
+  "name": "voice_llm",
+  "description": "Conversational LLM optimized for voice responses. Default: Ollama llama3.2 (local, no API key). Change model to any Ollama model you have pulled, e.g. 'openclaw', 'mistral', 'qwen2.5'. Switch provider to 'anthropic' or 'openai' if preferred.",
+  "type": "llm",
+  "provider": "ollama",
+  "model": "qwen3.5:4b",
+  "system_prompt_file": "system.md",
+  "temperature": 0.7,
+  "max_tokens": 1024,
+  "stream": false,
+  "max_history": 10,
+  "max_tool_turns": 3,
+  "tools": [
+    "web_search",
+    "fetch_url",
+    "scaffold_list",
+    "scaffold_read",
+    "scaffold_create",
+    "read_file",
+    "write_file",
+    "safe_delete_file",
+    "list_directory"
+  ],
+  "input": {
+    "message": {
+      "type": "string",
+      "required": true
+    },
+    "history": {
+      "type": "array",
+      "required": false
+    },
+    "available_nodes": {
+      "type": "array",
+      "required": false
+    },
+    "memory_context": {
+      "type": "array",
+      "required": false
+    }
+  },
+  "output": {
+    "response": { "type": "string" },
+    "history":  { "type": "array" },
+    "usage":    { "type": "object" }
+  }
+}

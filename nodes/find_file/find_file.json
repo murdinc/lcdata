@@ -1,0 +1,21 @@
+{
+  "name": "find_file",
+  "description": "Fuzzy-matches a filename in a directory listing. Returns the exact full path. Handles case differences, spaces, and missing extensions.",
+  "type": "command",
+  "command": "python3",
+  "args": ["find_file.py"],
+  "env": {
+    "TARGET":    "{{.input.name}}",
+    "DIRECTORY": "{{.input.directory}}",
+    "FILES":     "{{toJSON .input.files}}"
+  },
+  "input": {
+    "name":      { "type": "string", "required": true },
+    "directory": { "type": "string", "required": true },
+    "files":     { "type": "array",  "required": true }
+  },
+  "output": {
+    "stdout":    { "type": "string" },
+    "exit_code": { "type": "integer" }
+  }
+}
